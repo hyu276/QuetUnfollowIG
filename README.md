@@ -2,6 +2,12 @@
 
 Local-first Instagram follower/following snapshot tracker with a Next.js live validation console.
 
+## Live deployment
+
+Production test console: https://quet-unfollow-ig.vercel.app
+
+The current production deployment was built successfully with Next.js 16.3.2, passed TypeScript checking, reached Vercel `READY`, and returns HTTP 200.
+
 The repository contains two surfaces that use the same crawler:
 
 1. A Chrome/Chromium Manifest V3 extension that is allowed to use the Instagram session already logged in on `instagram.com`.
@@ -44,7 +50,6 @@ The Next.js test console is intentionally diagnostic. During a real crawl it sho
 - Duplicate-ID checks.
 - Count-vs-array integrity checks.
 - Baseline presence.
-- Raw user samples with numeric Instagram IDs.
 - Baseline-to-latest follower/following differences.
 - Lightweight snapshot history.
 
@@ -76,6 +81,19 @@ Do not share the pairing key. If it is exposed, click **Tạo pairing key mới*
 
 Whenever you pull a newer commit, click **Reload** on the extension card in `chrome://extensions` before testing the website again.
 
+## Test with the production website
+
+1. Load/reload the extension from this repository in `chrome://extensions`.
+2. Make sure Instagram is logged in in the same Chromium browser.
+3. Open `https://quet-unfollow-ig.vercel.app`.
+4. Open the extension popup and copy the pairing key.
+5. Paste it into the website and click **Connect**.
+6. The bridge indicator should turn green and the Instagram session should show **Detected**.
+7. Click **Run live crawl**.
+8. Watch Followers and Following pagination, account counts, page latency, and `Next page` in realtime.
+
+If the bridge indicator stays red, reload the extension and then reload the webpage.
+
 ## Run the live website locally
 
 ```bash
@@ -85,9 +103,7 @@ npm run dev
 
 Open `http://localhost:3000`, copy the pairing key from the extension popup, paste it into the website, and click **Connect**.
 
-If the bridge indicator stays red, reload the extension and then reload the webpage.
-
-## Deploy to Vercel
+## Deploy your own Vercel copy
 
 1. In Vercel choose **Add New -> Project**.
 2. Import `hyu276/QuetUnfollowIG` from GitHub.
