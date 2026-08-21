@@ -4,6 +4,10 @@ Local-first Instagram follower/following snapshot tracker.
 
 This project is a Chrome/Chromium Manifest V3 extension with a full dashboard. It reads follower/following lists from the Instagram account already logged in on `instagram.com`, stores snapshots only in `chrome.storage.local`, and compares later crawls against the first baseline or the immediately previous snapshot.
 
+## Why this is an extension instead of a normal hosted webpage
+
+A normal site such as GitHub Pages cannot directly reuse the authenticated Instagram session from another tab because browser origin isolation prevents one website from reading another website's cookies/session. The dashboard is therefore packaged as an extension page, while the privileged crawler is limited to `https://www.instagram.com/*`.
+
 ## What it shows
 
 - Lost followers: people present in the baseline/previous Followers list but absent now.
@@ -22,11 +26,12 @@ Comparisons use Instagram numeric user IDs when available, so username changes d
 - No follower/following data sent off-device.
 - No follow/unfollow automation.
 - The extension only sends GET requests to `https://www.instagram.com/` while you are already logged in.
+- Requested Chrome permissions are limited to local storage, Instagram cookies, and the `instagram.com` host.
 
 ## Install
 
 1. Download or clone this repository.
-2. Open `chrome://extensions` in Chrome/Edge/Brave.
+2. Open `chrome://extensions` in Chrome/Edge/Brave desktop.
 3. Enable **Developer mode**.
 4. Choose **Load unpacked** and select this repository folder.
 5. Open Instagram in the same browser and make sure you are logged in.
