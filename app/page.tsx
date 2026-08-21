@@ -20,21 +20,24 @@ type Snapshot = {
   counts: { followers: number; following: number };
 };
 
-type AccountState = {
-  accountId: string;
-  baseline: Snapshot | null;
-  snapshots: Snapshot[];
+type SnapshotSummary = {
+  id: string;
+  crawledAt: string;
+  durationMs?: number;
+  counts: { followers: number; following: number };
 };
 
-type AppState = {
-  schemaVersion: number;
-  currentAccountId: string | null;
-  accounts: Record<string, AccountState>;
+type WebAccount = {
+  accountId: string;
+  baseline: Snapshot | null;
+  latest: Snapshot | null;
+  history: SnapshotSummary[];
+  snapshotCount: number;
 };
 
 type StatusResult = {
   loggedInUserId: string | null;
-  state: AppState;
+  account: WebAccount | null;
 };
 
 type ProgressEvent = {
@@ -206,12 +209,8 @@ export default function Home() {
     }
   }
 
-  const account = useMemo(() => {
-    if (!status?.loggedInUserId) return null;
-    return status.state.accounts?.[status.loggedInUserId] || null;
-  }, [status]);
-
-  const latest = account?.snapshots?.at(-1) || null;
+  const account = status?.account || null;
+  const latest = account?.latest || null;
   const baseline = account?.baseline || null;
 
   const diff = useMemo(() => {
@@ -431,11 +430,11 @@ export default function Home() {
       <section className="panel history-panel">
         <div className="panel-head">
           <div><span className="section-kicker">HISTORY</span><h2>Snapshots hiện có</h2></div>
-          <span>{account?.snapshots?.length || 0} snapshots</span>
+          <span>{account?.snapshotCount || 0} snapshots</span>
         </div>
         <div className="history-table">
           <div className="history-row history-head"><span>Time</span><span>Followers</span><span>Following</span><span>Duration</span><span>ID</span></div>
-          {account?.snapshots?.length ? [...account.snapshots].reverse().map((snapshot) => (
+          {account?.history?.length ? [...account.history].reverse().map((snapshot) => (
             <div className="history-row" key={snapshot.id}>
               <span>{formatDate(snapshot.crawledAt)}</span>
               <span>{formatNumber(snapshot.counts.followers)}</span>
