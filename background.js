@@ -87,13 +87,14 @@ function broadcastProgress(payload) {
   }
 }
 
-async function emitProgress(kind, loaded, page, startedAt) {
+async function emitProgress(kind, loaded, page, startedAt, extra = {}) {
   const payload = {
     kind,
     loaded,
     page,
     elapsedMs: Date.now() - startedAt,
-    at: new Date().toISOString()
+    at: new Date().toISOString(),
+    ...extra
   };
   broadcastProgress(payload);
   try {
@@ -147,20 +148,13 @@ async function fetchRelationshipList(userId, kind, crawlStartedAt) {
 
     const users = Array.isArray(data?.users) ? data.users : [];
     all.push(...users);
-    const next = data?.next_max_id ? String(data.next_max_id) : "";
+    nextMaxId = data?.next_max_id ? String(data.next_max_id) : "";
 
-    await emitProgress(kind, all.length, page, crawlStartedAt);
-    broadcastProgress({
-      kind,
-      loaded: all.length,
-      page,
+    await emitProgress(kind, all.length, page, crawlStartedAt, {
       pageLatencyMs: Math.round(performance.now() - pageStartedAt),
-      hasNextPage: Boolean(next),
-      at: new Date().toISOString(),
-      elapsedMs: Date.now() - crawlStartedAt
+      hasNextPage: Boolean(nextMaxId)
     });
 
-    nextMaxId = next;
     if (nextMaxId) await sleep(jitter());
   } while (nextMaxId);
 
@@ -170,10 +164,10 @@ async function fetchRelationshipList(userId, kind, crawlStartedAt) {
 async function crawlNow() {
   const crawlStartedAt = Date.now();
   const userId = await getLoggedInUserId();
-  await emitProgress("followers", 0, 0, crawlStartedAt);
+  await emitProgress("followers", 0, 0, crawlStartedAt, { hasNextPage: true });
   const followers = await fetchRelationshipList(userId, "followers", crawlStartedAt);
   await sleep(jitter());
-  await emitProgress("following", 0, 0, crawlStartedAt);
+  await emitProgress("following", 0, 0, crawlStartedAt, { hasNextPage: true });
   const following = await fetchRelationshipList(userId, "following", crawlStartedAt);
 
   const snapshot = {
@@ -221,6 +215,42 @@ async function status() {
   return { loggedInUserId, state };
 }
 
+async function statusForWeb() {
+  let loggedInUserId = null;
+  try {
+    loggedInUserId = await getLoggedInUserId();
+  } catch (_) {
+    // Keep the website useful even when Instagram is logged out.
+  }
+
+  if (!loggedInUserId) return { loggedInUserId: null, account: null };
+  const state = await getState();
+  const account = state.accounts[loggedInUserId];
+  if (!account) return { loggedInUserId, account: null };
+
+  const latest = account.snapshots?.at(-1) || null;
+  const history = (account.snapshots || []).map((snapshot) => ({
+    id: snapshot.id,
+    crawledAt: snapshot.crawledAt,
+    durationMs: snapshot.durationMs,
+    counts: snapshot.counts || {
+      followers: snapshot.followers?.length || 0,
+      following: snapshot.following?.length || 0
+    }
+  }));
+
+  return {
+    loggedInUserId,
+    account: {
+      accountId: account.accountId,
+      baseline: account.baseline,
+      latest,
+      history,
+      snapshotCount: history.length
+    }
+  };
+}
+
 async function resetBaseline() {
   const userId = await getLoggedInUserId();
   const state = await getState();
@@ -234,7 +264,7 @@ async function resetBaseline() {
 
 async function handleWebRequest(message) {
   await assertPairingKey(message?.pairingKey);
-  if (message?.action === "GET_STATUS") return status();
+  if (message?.action === "GET_STATUS") return statusForWeb();
   if (message?.action === "CRAWL_NOW") return crawlNow();
   throw new Error("Web action không được hỗ trợ.");
 }
