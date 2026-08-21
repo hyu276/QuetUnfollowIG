@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "QuetUnfollowIG",
+  "version": "1.0.0",
+  "description": "Local-first Instagram follower/following snapshot tracker.",
+  "permissions": ["storage", "cookies", "tabs"],
+  "host_permissions": ["https://www.instagram.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "QuetUnfollowIG",
+    "default_popup": "popup.html"
+  }
+}
