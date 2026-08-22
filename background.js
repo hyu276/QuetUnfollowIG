@@ -7,6 +7,7 @@ const ASBD_ID = "198387";
 const MAX_HISTORY = 30;
 const LOCAL_SAMPLE_SIZE = 12;
 const PAGE_SIZE = 100;
+const MAX_RELATIONSHIP_PAGES = 1000;
 const bridgePorts = new Set();
 
 let activeCrawl = null;
@@ -52,11 +53,7 @@ function compactTracker(tracker) {
   const baseline = baselineId
     ? snapshots.find((snapshot) => snapshot.id === baselineId) || compactSnapshot(tracker.baseline)
     : snapshots[0] || null;
-  return {
-    ...tracker,
-    baseline,
-    snapshots
-  };
+  return { ...tracker, baseline, snapshots };
 }
 
 async function getState() {
@@ -66,12 +63,8 @@ async function getState() {
   if (!state.targets) state.targets = {};
 
   if (Number(state.schemaVersion || 0) < 4) {
-    for (const [key, tracker] of Object.entries(state.targets)) {
-      state.targets[key] = compactTracker(tracker);
-    }
-    for (const [key, account] of Object.entries(state.accounts)) {
-      state.accounts[key] = compactTracker(account);
-    }
+    for (const [key, tracker] of Object.entries(state.targets)) state.targets[key] = compactTracker(tracker);
+    for (const [key, account] of Object.entries(state.accounts)) state.accounts[key] = compactTracker(account);
     state.schemaVersion = 4;
     await chrome.storage.local.set({ [STORAGE_KEY]: state });
   }
@@ -111,9 +104,7 @@ async function assertPairingKey(key) {
 
 async function getLoggedInUserId() {
   const cookie = await chrome.cookies.get({ url: "https://www.instagram.com/", name: "ds_user_id" });
-  if (!cookie?.value) {
-    throw new Error("Không tìm thấy phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt rồi thử lại.");
-  }
+  if (!cookie?.value) throw new Error("Không tìm thấy phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt rồi thử lại.");
   return String(cookie.value);
 }
 
@@ -126,14 +117,12 @@ function normalizeUsername(input) {
 }
 
 function normalizeUser(user) {
-  const username = String(user?.username || "");
-  const rawId = String(user?.pk ?? user?.id ?? user?.pk_id ?? "");
   return {
-    id: rawId || (username ? `username:${username.toLowerCase()}` : ""),
-    username,
-    fullName: user?.full_name || "",
-    isPrivate: Boolean(user?.is_private),
-    isVerified: Boolean(user?.is_verified)
+    id: String(user?.pk ?? user?.id ?? user?.pk_id ?? ""),
+    username: String(user?.username || ""),
+    fullName: user?.full_name || user?.fullName || "",
+    isPrivate: Boolean(user?.is_private ?? user?.isPrivate),
+    isVerified: Boolean(user?.is_verified ?? user?.isVerified)
   };
 }
 
@@ -221,38 +210,20 @@ async function resolveTargetProfile(input, viewerId) {
   }
 
   const attempts = [
-    {
-      name: "web_profile_info",
-      url: `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
-    },
-    {
-      name: "usernameinfo_stream",
-      url: `https://www.instagram.com/api/v1/users/${encodeURIComponent(username)}/usernameinfo_stream/`
-    },
-    {
-      name: "feed_by_username",
-      url: `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/?count=1`
-    }
+    { name: "web_profile_info", url: `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}` },
+    { name: "usernameinfo_stream", url: `https://www.instagram.com/api/v1/users/${encodeURIComponent(username)}/usernameinfo_stream/` },
+    { name: "feed_by_username", url: `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/?count=1` }
   ];
 
   const errors = [];
   for (const attempt of attempts) {
     try {
       const { response, data } = await fetchInstagramJson(attempt.url);
-      if (!response.ok) {
-        errors.push(`${attempt.name}: HTTP ${response.status}`);
-        continue;
-      }
+      if (!response.ok) { errors.push(`${attempt.name}: HTTP ${response.status}`); continue; }
       const candidate = findUserCandidate(data, username);
-      if (!candidate) {
-        errors.push(`${attempt.name}: no user payload`);
-        continue;
-      }
+      if (!candidate) { errors.push(`${attempt.name}: no user payload`); continue; }
       const profile = normalizeTargetProfile(candidate, username);
-      if (!profile.id) {
-        errors.push(`${attempt.name}: no numeric id`);
-        continue;
-      }
+      if (!profile.id) { errors.push(`${attempt.name}: no numeric id`); continue; }
       profile.resolver = attempt.name;
       profile.isSelf = profile.id === String(viewerId);
       return profile;
@@ -262,16 +233,6 @@ async function resolveTargetProfile(input, viewerId) {
   }
 
   throw new Error(`Không resolve được @${username}. Profile có thể không tồn tại, Instagram đang gate endpoint này, hoặc session hiện tại không nhìn thấy profile. ${errors.join(" · ")}`);
-}
-
-function dedupeUsers(users) {
-  const map = new Map();
-  for (const raw of users) {
-    const user = normalizeUser(raw);
-    if (!user.id) continue;
-    map.set(user.id, user);
-  }
-  return [...map.values()];
 }
 
 function broadcastProgress(payload) {
@@ -309,12 +270,17 @@ function accessError(target, kind, status, detail = "") {
 }
 
 async function fetchRelationshipList(target, kind, crawlStartedAt) {
-  const all = [];
+  const usersById = new Map();
+  const seenCursors = new Set();
   let nextMaxId = "";
   let page = 0;
 
   do {
     page += 1;
+    if (page > MAX_RELATIONSHIP_PAGES) {
+      throw new Error(`Pagination ${kind} vượt quá ${MAX_RELATIONSHIP_PAGES} pages. Run bị hủy để tránh vòng lặp API.`);
+    }
+
     const pageStartedAt = performance.now();
     const params = new URLSearchParams({ count: String(PAGE_SIZE), search_surface: "follow_list_page" });
     if (nextMaxId) params.set("max_id", nextMaxId);
@@ -330,18 +296,36 @@ async function fetchRelationshipList(target, kind, crawlStartedAt) {
       throw new Error(`Instagram trả về trạng thái ${data.status} khi đọc ${kind} của @${target.username || target.id}.`);
     }
 
-    const users = Array.isArray(data?.users) ? data.users : [];
-    all.push(...users);
-    nextMaxId = data?.next_max_id ? String(data.next_max_id) : "";
+    const rawUsers = Array.isArray(data?.users) ? data.users : [];
+    for (const rawUser of rawUsers) {
+      const user = normalizeUser(rawUser);
+      if (!user.id || !/^\d+$/.test(user.id)) {
+        throw new Error(`Instagram trả về một ${kind} entry không có stable numeric user ID. Run bị hủy để tránh false diff.`);
+      }
+      if (usersById.has(user.id)) {
+        throw new Error(`Instagram pagination trả duplicate user ID ${user.id} trong ${kind}. List có thể đang biến động; run bị hủy để tránh false diff.`);
+      }
+      usersById.set(user.id, user);
+    }
 
-    await emitProgress(kind, all.length, page, crawlStartedAt, target, {
+    const candidateNext = data?.next_max_id ? String(data.next_max_id) : "";
+    if (candidateNext && seenCursors.has(candidateNext)) {
+      throw new Error(`Instagram pagination lặp lại cursor trong ${kind}. Run bị hủy để tránh loop và snapshot thiếu.`);
+    }
+    if (candidateNext && rawUsers.length === 0) {
+      throw new Error(`Instagram trả page rỗng nhưng vẫn có next cursor trong ${kind}. Run bị hủy vì pagination không nhất quán.`);
+    }
+    if (candidateNext) seenCursors.add(candidateNext);
+    nextMaxId = candidateNext;
+
+    await emitProgress(kind, usersById.size, page, crawlStartedAt, target, {
       pageLatencyMs: Math.round(performance.now() - pageStartedAt),
       hasNextPage: Boolean(nextMaxId)
     });
     if (nextMaxId) await sleep(jitter());
   } while (nextMaxId);
 
-  return dedupeUsers(all);
+  return [...usersById.values()];
 }
 
 function trackerKey(viewerId, targetId) {
@@ -350,15 +334,9 @@ function trackerKey(viewerId, targetId) {
 
 function makeWarnings(target, followers, following) {
   const warnings = [];
-  if (target.expectedFollowers != null && followers.length !== target.expectedFollowers) {
-    warnings.push(`Followers crawl=${followers.length}, profile count=${target.expectedFollowers}.`);
-  }
-  if (target.expectedFollowing != null && following.length !== target.expectedFollowing) {
-    warnings.push(`Following crawl=${following.length}, profile count=${target.expectedFollowing}.`);
-  }
-  if (target.isPrivate && !target.isSelf && !target.viewerFollows) {
-    warnings.push("Target là private account và resolver không xác nhận viewer đang follow target; khả năng truy cập phụ thuộc session thực tế.");
-  }
+  if (target.expectedFollowers != null && followers.length !== target.expectedFollowers) warnings.push(`Followers crawl=${followers.length}, profile count=${target.expectedFollowers}.`);
+  if (target.expectedFollowing != null && following.length !== target.expectedFollowing) warnings.push(`Following crawl=${following.length}, profile count=${target.expectedFollowing}.`);
+  if (target.isPrivate && !target.isSelf && !target.viewerFollows) warnings.push("Target là private account và resolver không xác nhận viewer đang follow target; khả năng truy cập phụ thuộc session thực tế.");
   return warnings;
 }
 
@@ -496,11 +474,7 @@ async function status() {
   let loggedInUserId = null;
   try { loggedInUserId = await getLoggedInUserId(); } catch (_) {}
   const cloudConfig = await cloudGetConfig();
-  return {
-    loggedInUserId,
-    cloudConfig,
-    activeCrawl: activeCrawl ? { ...activeCrawl } : null
-  };
+  return { loggedInUserId, cloudConfig, activeCrawl: activeCrawl ? { ...activeCrawl } : null };
 }
 
 async function safeCloudTargetStatus(targetId) {
@@ -520,9 +494,7 @@ async function statusForWeb(options = {}) {
   try { viewerId = await getLoggedInUserId(); } catch (_) {}
   const rawConfig = await cloudGetConfig();
   const cloudConfig = publicCloudConfig(rawConfig);
-  if (!viewerId) {
-    return { loggedInUserId: null, target: null, tracker: null, cloudConfig, cloud: null, activeCrawl };
-  }
+  if (!viewerId) return { loggedInUserId: null, target: null, tracker: null, cloudConfig, cloud: null, activeCrawl };
 
   const rawTarget = normalizeUsername(options?.targetUsername);
   if (!rawTarget) {
