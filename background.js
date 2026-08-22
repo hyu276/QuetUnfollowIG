@@ -5,14 +5,58 @@ const PAIRING_KEY_STORAGE = "quetUnfollowIGPairingKey";
 const APP_ID = "936619743392459";
 const ASBD_ID = "198387";
 const MAX_HISTORY = 30;
+const LOCAL_SAMPLE_SIZE = 12;
 const PAGE_SIZE = 100;
 const bridgePorts = new Set();
+
+let activeCrawl = null;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const jitter = () => 900 + Math.floor(Math.random() * 900);
 
 function emptyState() {
-  return { schemaVersion: 3, currentAccountId: null, accounts: {}, targets: {} };
+  return { schemaVersion: 4, currentAccountId: null, accounts: {}, targets: {} };
+}
+
+function compactSnapshot(snapshot) {
+  if (!snapshot) return null;
+  return {
+    id: snapshot.id,
+    viewerAccountId: snapshot.viewerAccountId,
+    accountId: snapshot.accountId,
+    targetId: snapshot.targetId,
+    targetUsername: snapshot.targetUsername,
+    targetFullName: snapshot.targetFullName,
+    targetIsPrivate: snapshot.targetIsPrivate,
+    targetViewerFollows: snapshot.targetViewerFollows,
+    resolver: snapshot.resolver,
+    expectedCounts: snapshot.expectedCounts,
+    crawledAt: snapshot.crawledAt,
+    durationMs: snapshot.durationMs,
+    followers: Array.isArray(snapshot.followers) ? snapshot.followers.slice(0, LOCAL_SAMPLE_SIZE) : [],
+    following: Array.isArray(snapshot.following) ? snapshot.following.slice(0, LOCAL_SAMPLE_SIZE) : [],
+    counts: snapshot.counts || {
+      followers: Array.isArray(snapshot.followers) ? snapshot.followers.length : 0,
+      following: Array.isArray(snapshot.following) ? snapshot.following.length : 0
+    },
+    warnings: Array.isArray(snapshot.warnings) ? snapshot.warnings.slice(0, 8) : [],
+    cloudRunId: snapshot.cloudRunId || null,
+    cloudDiffSummary: snapshot.cloudDiffSummary || null
+  };
+}
+
+function compactTracker(tracker) {
+  if (!tracker) return tracker;
+  const snapshots = (tracker.snapshots || []).slice(-MAX_HISTORY).map(compactSnapshot).filter(Boolean);
+  const baselineId = tracker.baseline?.id;
+  const baseline = baselineId
+    ? snapshots.find((snapshot) => snapshot.id === baselineId) || compactSnapshot(tracker.baseline)
+    : snapshots[0] || null;
+  return {
+    ...tracker,
+    baseline,
+    snapshots
+  };
 }
 
 async function getState() {
@@ -20,11 +64,24 @@ async function getState() {
   const state = stored[STORAGE_KEY] || emptyState();
   if (!state.accounts) state.accounts = {};
   if (!state.targets) state.targets = {};
-  state.schemaVersion = 3;
+
+  if (Number(state.schemaVersion || 0) < 4) {
+    for (const [key, tracker] of Object.entries(state.targets)) {
+      state.targets[key] = compactTracker(tracker);
+    }
+    for (const [key, account] of Object.entries(state.accounts)) {
+      state.accounts[key] = compactTracker(account);
+    }
+    state.schemaVersion = 4;
+    await chrome.storage.local.set({ [STORAGE_KEY]: state });
+  }
+
+  state.schemaVersion = 4;
   return state;
 }
 
 async function setState(state) {
+  state.schemaVersion = 4;
   await chrome.storage.local.set({ [STORAGE_KEY]: state });
 }
 
@@ -69,9 +126,11 @@ function normalizeUsername(input) {
 }
 
 function normalizeUser(user) {
+  const username = String(user?.username || "");
+  const rawId = String(user?.pk ?? user?.id ?? user?.pk_id ?? "");
   return {
-    id: String(user?.pk ?? user?.id ?? user?.pk_id ?? ""),
-    username: user?.username || "",
+    id: rawId || (username ? `username:${username.toLowerCase()}` : ""),
+    username,
     fullName: user?.full_name || "",
     isPrivate: Boolean(user?.is_private),
     isVerified: Boolean(user?.is_verified)
@@ -209,11 +268,10 @@ function dedupeUsers(users) {
   const map = new Map();
   for (const raw of users) {
     const user = normalizeUser(raw);
-    const key = user.id || `username:${user.username.toLowerCase()}`;
-    if (!key || key === "username:") continue;
-    map.set(key, user);
+    if (!user.id) continue;
+    map.set(user.id, user);
   }
-  return [...map.values()].sort((a, b) => a.username.localeCompare(b.username));
+  return [...map.values()];
 }
 
 function broadcastProgress(payload) {
@@ -225,7 +283,9 @@ function broadcastProgress(payload) {
 
 async function emitProgress(kind, loaded, page, startedAt, target, extra = {}) {
   const payload = {
-    kind, loaded, page,
+    kind,
+    loaded,
+    page,
     target: { id: target.id, username: target.username, isPrivate: target.isPrivate },
     elapsedMs: Date.now() - startedAt,
     at: new Date().toISOString(),
@@ -302,11 +362,12 @@ function makeWarnings(target, followers, following) {
   return warnings;
 }
 
-async function crawlNow(options = {}) {
+async function executeCrawl(options = {}) {
   const crawlStartedAt = Date.now();
   const viewerId = await getLoggedInUserId();
   await cloudRequireWorkspace();
   const target = await resolveTargetProfile(options?.targetUsername, viewerId);
+  activeCrawl.target = target.username || target.id;
 
   await emitProgress("followers", 0, 0, crawlStartedAt, target, { hasNextPage: true });
   const followers = await fetchRelationshipList(target, "followers", crawlStartedAt);
@@ -333,12 +394,11 @@ async function crawlNow(options = {}) {
     warnings: makeWarnings(target, followers, following)
   };
 
-  // Cloud commit is authoritative. If this fails, the crawl is not accepted as a successful snapshot.
   const cloud = await cloudSyncSnapshot(snapshot, target, viewerId, chrome.runtime.getManifest().version);
   snapshot.cloudRunId = cloud?.run?.id || null;
   snapshot.cloudDiffSummary = cloud?.diffSummary || null;
 
-  // Local data remains a cache for fast rendering/backwards compatibility only.
+  const compact = compactSnapshot(snapshot);
   const state = await getState();
   state.currentAccountId = viewerId;
   const key = trackerKey(viewerId, target.id);
@@ -354,29 +414,48 @@ async function crawlNow(options = {}) {
   tracker.targetUsername = target.username || tracker.targetUsername;
   tracker.targetFullName = target.fullName || tracker.targetFullName;
   tracker.targetIsPrivate = target.isPrivate;
-  if (!tracker.baseline) tracker.baseline = snapshot;
-  tracker.snapshots.push(snapshot);
+  if (!tracker.baseline) tracker.baseline = compact;
+  tracker.snapshots.push(compact);
   if (tracker.snapshots.length > MAX_HISTORY) tracker.snapshots = tracker.snapshots.slice(-MAX_HISTORY);
-  state.targets[key] = tracker;
+  state.targets[key] = compactTracker(tracker);
 
   if (target.isSelf) {
     const account = state.accounts[viewerId] || { accountId: viewerId, baseline: null, snapshots: [] };
-    if (!account.baseline) account.baseline = snapshot;
-    account.snapshots.push(snapshot);
+    if (!account.baseline) account.baseline = compact;
+    account.snapshots.push(compact);
     if (account.snapshots.length > MAX_HISTORY) account.snapshots = account.snapshots.slice(-MAX_HISTORY);
-    state.accounts[viewerId] = account;
+    state.accounts[viewerId] = compactTracker(account);
   }
 
   await setState(state);
   return {
     viewerId,
     target,
-    snapshot,
+    snapshot: compact,
     cloud,
     isFirstSnapshot: tracker.snapshots.length === 1,
     baselineId: tracker.baseline.id,
     trackerKey: key
   };
+}
+
+async function crawlNow(options = {}) {
+  if (activeCrawl) {
+    const target = activeCrawl.target ? ` cho ${activeCrawl.target}` : "";
+    throw new Error(`Một crawl khác đang chạy${target}. Hãy chờ crawl hiện tại hoàn tất trước khi bắt đầu crawl mới.`);
+  }
+
+  const crawlId = crypto.randomUUID();
+  activeCrawl = {
+    id: crawlId,
+    target: normalizeUsername(options?.targetUsername) || "current account",
+    startedAt: new Date().toISOString()
+  };
+  try {
+    return await executeCrawl(options);
+  } finally {
+    if (activeCrawl?.id === crawlId) activeCrawl = null;
+  }
 }
 
 function summarizeTracker(tracker) {
@@ -386,10 +465,7 @@ function summarizeTracker(tracker) {
     id: snapshot.id,
     crawledAt: snapshot.crawledAt,
     durationMs: snapshot.durationMs,
-    counts: snapshot.counts || {
-      followers: snapshot.followers?.length || 0,
-      following: snapshot.following?.length || 0
-    }
+    counts: snapshot.counts || { followers: 0, following: 0 }
   }));
   return {
     viewerAccountId: tracker.viewerAccountId,
@@ -404,21 +480,36 @@ function summarizeTracker(tracker) {
   };
 }
 
+function publicCloudConfig(config) {
+  if (!config) return { configured: false, workspace: null };
+  return {
+    configured: Boolean(config.configured),
+    workspace: config.workspace || null,
+    maskedKey: config.maskedKey || "",
+    autoProvisioned: Boolean(config.autoProvisioned),
+    code: config.code || null,
+    error: config.error || null
+  };
+}
+
 async function status() {
   let loggedInUserId = null;
   try { loggedInUserId = await getLoggedInUserId(); } catch (_) {}
-  const state = await getState();
   const cloudConfig = await cloudGetConfig();
-  return { loggedInUserId, state, cloudConfig };
+  return {
+    loggedInUserId,
+    cloudConfig,
+    activeCrawl: activeCrawl ? { ...activeCrawl } : null
+  };
 }
 
 async function safeCloudTargetStatus(targetId) {
   const config = await cloudGetConfig();
-  if (!config.configured) return { configured: false, workspace: null, status: null };
+  if (!config.configured) return { configured: false, workspace: null, status: null, error: config.error || null };
   if (config.error) return { configured: true, workspace: config.workspace, status: null, error: config.error };
   try {
-    const status = await cloudGetTargetStatus(targetId);
-    return { configured: true, workspace: config.workspace, status };
+    const cloudStatus = await cloudGetTargetStatus(targetId);
+    return { configured: true, workspace: config.workspace, status: cloudStatus };
   } catch (error) {
     return { configured: true, workspace: config.workspace, status: null, error: error?.message || String(error) };
   }
@@ -427,8 +518,11 @@ async function safeCloudTargetStatus(targetId) {
 async function statusForWeb(options = {}) {
   let viewerId = null;
   try { viewerId = await getLoggedInUserId(); } catch (_) {}
-  const cloudConfig = await cloudGetConfig();
-  if (!viewerId) return { loggedInUserId: null, target: null, tracker: null, cloudConfig, cloud: null };
+  const rawConfig = await cloudGetConfig();
+  const cloudConfig = publicCloudConfig(rawConfig);
+  if (!viewerId) {
+    return { loggedInUserId: null, target: null, tracker: null, cloudConfig, cloud: null, activeCrawl };
+  }
 
   const rawTarget = normalizeUsername(options?.targetUsername);
   if (!rawTarget) {
@@ -441,7 +535,8 @@ async function statusForWeb(options = {}) {
       target,
       tracker: summarizeTracker(selfTracker),
       cloudConfig,
-      cloud
+      cloud,
+      activeCrawl: activeCrawl ? { ...activeCrawl } : null
     };
   }
 
@@ -449,31 +544,20 @@ async function statusForWeb(options = {}) {
   const state = await getState();
   const tracker = state.targets[trackerKey(viewerId, target.id)] || null;
   const cloud = await safeCloudTargetStatus(target.id);
-  return { loggedInUserId: viewerId, target, tracker: summarizeTracker(tracker), cloudConfig, cloud };
-}
-
-async function resetBaseline(options = {}) {
-  const viewerId = await getLoggedInUserId();
-  const target = await resolveTargetProfile(options?.targetUsername, viewerId);
-  const state = await getState();
-  const key = trackerKey(viewerId, target.id);
-  const tracker = state.targets[key];
-  const latest = tracker?.snapshots?.at(-1);
-  if (!latest) throw new Error("Chưa có snapshot local nào của target này để đặt làm baseline.");
-  tracker.baseline = latest;
-  state.targets[key] = tracker;
-  if (target.isSelf && state.accounts[viewerId]) state.accounts[viewerId].baseline = latest;
-  await setState(state);
-  return { target, baselineId: latest.id, crawledAt: latest.crawledAt };
+  return {
+    loggedInUserId: viewerId,
+    target,
+    tracker: summarizeTracker(tracker),
+    cloudConfig,
+    cloud,
+    activeCrawl: activeCrawl ? { ...activeCrawl } : null
+  };
 }
 
 async function handleWebRequest(message) {
   await assertPairingKey(message?.pairingKey);
   if (message?.action === "GET_STATUS") return statusForWeb(message?.payload || {});
   if (message?.action === "CRAWL_NOW") return crawlNow(message?.payload || {});
-  if (message?.action === "RESET_BASELINE") return resetBaseline(message?.payload || {});
-  if (message?.action === "GET_CLOUD_TARGETS") return cloudListTargets();
-  if (message?.action === "GET_CLOUD_CONFIG") return cloudGetConfig();
   throw new Error("Web action không được hỗ trợ.");
 }
 
@@ -498,7 +582,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     GET_STATUS: status,
     CRAWL_NOW: () => crawlNow(message?.payload || {}),
     CRAWL_TARGET: () => crawlNow({ targetUsername: message?.targetUsername }),
-    RESET_BASELINE: () => resetBaseline(message?.payload || {}),
     GET_PAIRING_KEY: async () => ({ pairingKey: await getPairingKey() }),
     ROTATE_PAIRING_KEY: async () => ({ pairingKey: await rotatePairingKey() }),
     GET_CLOUD_CONFIG: cloudGetConfig,
