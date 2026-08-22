@@ -82,6 +82,11 @@
   font-weight: 500;
 }
 
+/* Pairing key is a local bridge secret. Mask it by default in the public page. */
+.control-form label:first-child input {
+  -webkit-text-security: disc;
+}
+
 .consumer-metrics {
   grid-template-columns: 1.1fr 1fr 1fr !important;
 }
@@ -174,6 +179,7 @@
   overflow-y: auto;
   margin-top: 12px;
   padding-right: 4px;
+  contain: layout paint;
 }
 
 .behavior-list::-webkit-scrollbar { width: 5px; }
@@ -187,6 +193,8 @@
   min-height: 58px;
   padding: 9px 5px;
   border-bottom: 1px solid #202124;
+  content-visibility: auto;
+  contain-intrinsic-size: 58px;
 }
 
 .behavior-user:last-child { border-bottom: 0; }
