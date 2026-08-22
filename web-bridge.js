@@ -1,11 +1,6 @@
 const BRIDGE_SOURCE = "quet-unfollow-ig-web";
 const port = chrome.runtime.connect({ name: "quet-unfollow-web-bridge" });
 
-function bridgeInfo() {
-  const manifest = chrome.runtime.getManifest();
-  return { version: manifest.version, extensionName: manifest.name };
-}
-
 function postToPage(type, payload = {}) {
   window.postMessage({ source: BRIDGE_SOURCE, type, ...payload }, window.location.origin);
 }
@@ -15,9 +10,7 @@ port.onMessage.addListener((message) => {
     postToPage("CRAWL_PROGRESS", { payload: message.payload });
     return;
   }
-  if (message?.type === "WEB_RESPONSE") {
-    postToPage("WEB_RESPONSE", message);
-  }
+  if (message?.type === "WEB_RESPONSE") postToPage("WEB_RESPONSE", message);
 });
 
 port.onDisconnect.addListener(() => {
@@ -32,7 +25,10 @@ window.addEventListener("message", (event) => {
   if (message?.source !== BRIDGE_SOURCE) return;
 
   if (message.type === "BRIDGE_PING") {
-    postToPage("BRIDGE_READY", bridgeInfo());
+    postToPage("BRIDGE_READY", {
+      version: chrome.runtime.getManifest().version,
+      extensionName: chrome.runtime.getManifest().name
+    });
     return;
   }
 
@@ -41,8 +37,12 @@ window.addEventListener("message", (event) => {
     type: "WEB_REQUEST",
     requestId: message.requestId,
     pairingKey: message.pairingKey,
-    action: message.action
+    action: message.action,
+    payload: message.payload || {}
   });
 });
 
-postToPage("BRIDGE_READY", bridgeInfo());
+postToPage("BRIDGE_READY", {
+  version: chrome.runtime.getManifest().version,
+  extensionName: chrome.runtime.getManifest().name
+});
