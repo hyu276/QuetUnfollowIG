@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "check:extension": "node --check background.js && node --check cloud.js && node --check popup.js && node --check web-bridge.js",
+    "prebuild": "npm run check:extension",
     "build": "next build",
     "start": "next start",
     "typecheck": "tsc --noEmit"
