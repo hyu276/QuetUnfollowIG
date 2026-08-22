@@ -7,6 +7,7 @@ const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
 });
 
 const MAX_CHUNK_USERS = 500;
+const PROFILE_HYDRATE_BATCH = 200;
 const STALE_RUN_HOURS = 6;
 
 const corsHeaders = {
@@ -103,11 +104,18 @@ function normalizeProfile(raw: any) {
 async function hydrateProfiles(ids: string[]) {
   const unique = [...new Set(ids.filter(Boolean))];
   if (!unique.length) return [];
-  const { data, error } = await supabase.from("ig_profiles")
-    .select("instagram_user_id,username,full_name,is_private,is_verified")
-    .in("instagram_user_id", unique);
-  if (error) throw error;
-  const map = new Map((data || []).map((p: any) => [p.instagram_user_id, p]));
+
+  const rows: any[] = [];
+  for (let index = 0; index < unique.length; index += PROFILE_HYDRATE_BATCH) {
+    const chunk = unique.slice(index, index + PROFILE_HYDRATE_BATCH);
+    const { data, error } = await supabase.from("ig_profiles")
+      .select("instagram_user_id,username,full_name,is_private,is_verified")
+      .in("instagram_user_id", chunk);
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+
+  const map = new Map(rows.map((p: any) => [p.instagram_user_id, p]));
   return unique.map((id) => map.get(id) || { instagram_user_id: id });
 }
 
