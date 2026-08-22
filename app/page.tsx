@@ -55,6 +55,7 @@ type CloudRun = {
   crawled_following: number;
   duration_ms?: number | null;
   previous_run_id?: string | null;
+  captured_at?: string | null;
   finished_at?: string | null;
   created_at?: string;
 };
@@ -457,7 +458,7 @@ export default function Home() {
             <span className="word reveal-3">who changed.</span>
           </div>
           <p className="hero-description reveal-4">
-            Không chỉ đếm unfollow hay new follow. QuetUnfollowIG lưu snapshot trên Supabase và chỉ ra chính xác tài khoản nào đã thay đổi giữa hai lần crawl hoàn chỉnh gần nhất.
+            Không chỉ đếm thay đổi follow. QuetUnfollowIG lưu snapshot trên Supabase và chỉ ra chính xác tài khoản nào xuất hiện hoặc biến mất giữa hai lần crawl hoàn chỉnh gần nhất.
           </p>
           <div className="hero-actions reveal-5">
             <a className="button button-primary" href="#control">Open tracker</a>
@@ -504,7 +505,7 @@ export default function Home() {
                 </div>
               ) : (
                 <div className="simple-mode-note">
-                  <b>Professional mode đang OFF.</b> Trang chỉ hiển thị các chỉ số chính và danh sách tài khoản có hành vi thay đổi.
+                  <b>Professional mode đang OFF.</b> Trang chỉ hiển thị các chỉ số chính và danh sách tài khoản có thay đổi quan hệ.
                 </div>
               )}
             </div>
@@ -518,7 +519,7 @@ export default function Home() {
             <span className="section-tag"><i>01</i> Control</span>
             <div>
               <h2>Choose an account.<br />Run a comparison.</h2>
-              <p>Pair main site với extension, chọn target rồi crawl. Supabase giữ complete history để lần crawl sau có thể xác định chính xác ai đã follow/unfollow.</p>
+              <p>Pair main site với extension, chọn target rồi crawl. Supabase giữ complete history để lần crawl sau xác định account nào đã xuất hiện hoặc biến mất khỏi Followers/Following.</p>
             </div>
           </div>
 
@@ -533,11 +534,11 @@ export default function Home() {
             <div className="control-form">
               <label>
                 <span>Pairing key</span>
-                <input value={pairingKey} onChange={(e) => setPairingKey(e.target.value)} placeholder="Paste extension pairing key" spellCheck={false} />
+                <input value={pairingKey} onChange={(e) => setPairingKey(e.target.value)} placeholder="Paste extension pairing key" spellCheck={false} autoComplete="off" />
               </label>
               <label>
                 <span>Instagram target</span>
-                <input value={targetUsername} onChange={(e) => setTargetUsername(e.target.value)} placeholder="@target_username · blank = me" spellCheck={false} />
+                <input value={targetUsername} onChange={(e) => setTargetUsername(e.target.value)} placeholder="@target_username · blank = me" spellCheck={false} autoComplete="off" />
               </label>
               <div className="control-buttons">
                 <button className="button button-white" onClick={connect} disabled={!bridgeReady || busy}>Connect</button>
@@ -574,7 +575,7 @@ export default function Home() {
                 <div className="metric-icon">04</div>
                 <span>Following</span>
                 <strong>{formatNumber(followingCount)}</strong>
-                <small>{cloudLatest ? formatDate(cloudLatest.finished_at || cloudLatest.created_at) : "No cloud snapshot"}</small>
+                <small>{cloudLatest ? formatDate(cloudLatest.captured_at || cloudLatest.finished_at || cloudLatest.created_at) : "No cloud snapshot"}</small>
               </article>
             </div>
           ) : (
@@ -681,32 +682,32 @@ export default function Home() {
             <span className="section-tag"><i>{professionalMode ? "03" : "02"}</i> Changes</span>
             <div>
               <h2>What changed<br />since the last crawl?</h2>
-              <p>So sánh latest complete run với complete run ngay trước đó của cùng target trong Cloud Workspace.</p>
+              <p>So sánh latest complete run với complete run ngay trước đó của cùng target. Đây là observed list difference; không tự động chứng minh nguyên nhân là unfollow.</p>
             </div>
           </div>
 
           <div className="change-grid">
             <article className="change-card hazy-card tone-red">
               <div className="change-symbol">−</div>
-              <span>{selfTarget ? "Unfollowed you" : "Target lost followers"}</span>
+              <span>{selfTarget ? "No longer follows you" : "No longer follows target"}</span>
               <strong>{cloudLatest ? formatNumber(changes.lostFollowers.length) : "—"}</strong>
               <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-amber">
               <div className="change-symbol">↘</div>
-              <span>{selfTarget ? "You unfollowed" : "Target unfollowed"}</span>
+              <span>{selfTarget ? "No longer in your Following" : "Target no longer follows"}</span>
               <strong>{cloudLatest ? formatNumber(changes.unfollowed.length) : "—"}</strong>
               <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-green">
               <div className="change-symbol">+</div>
-              <span>{selfTarget ? "Followed you" : "New followers"}</span>
+              <span>{selfTarget ? "New in your Followers" : "New followers"}</span>
               <strong>{cloudLatest ? formatNumber(changes.newFollowers.length) : "—"}</strong>
               <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-blue">
               <div className="change-symbol">↗</div>
-              <span>{selfTarget ? "You followed" : "Target followed"}</span>
+              <span>{selfTarget ? "New in your Following" : "New in target Following"}</span>
               <strong>{cloudLatest ? formatNumber(changes.newFollowing.length) : "—"}</strong>
               <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
@@ -716,39 +717,39 @@ export default function Home() {
             <div className="section-heading">
               <span className="section-tag"><i>{professionalMode ? "04" : "03"}</i> Who changed</span>
               <div>
-                <h2>Not just how many.<br />Exactly who.</h2>
-                <p>Mỗi danh sách dưới đây là toàn bộ account được PostgreSQL xác định là thay đổi giữa hai complete runs gần nhất — không phải sample.</p>
+                <h2>Not just how many.<br />Exactly which accounts.</h2>
+                <p>Đây là toàn bộ account xuất hiện hoặc biến mất giữa hai complete runs gần nhất. Disappearance có thể do unfollow, block, deactivate/delete hoặc thay đổi visibility — vì vậy UI không gán nguyên nhân khi dữ liệu không chứng minh được.</p>
               </div>
             </div>
 
             <div className="behavior-grid">
               <BehaviorListCard
-                title={selfTarget ? "Unfollowed you" : "No longer follows target"}
-                description={selfTarget ? "Tài khoản từng follow bạn ở lần trước nhưng không còn ở latest run." : "Tài khoản biến mất khỏi follower list của target."}
+                title={selfTarget ? "No longer follows you" : "No longer follows target"}
+                description={selfTarget ? "Từng có trong Followers của bạn nhưng không còn ở latest run." : "Từng có trong Followers của target nhưng không còn ở latest run."}
                 users={changes.lostFollowers}
                 tone="red"
                 symbol="−"
                 hasPreviousRun={hasPreviousCloudRun}
               />
               <BehaviorListCard
-                title={selfTarget ? "You unfollowed" : "Target unfollowed"}
-                description={selfTarget ? "Tài khoản bạn từng follow nhưng hiện không còn trong Following." : "Tài khoản bị target bỏ follow kể từ lần crawl trước."}
+                title={selfTarget ? "No longer in your Following" : "Target no longer follows"}
+                description={selfTarget ? "Từng có trong Following của bạn nhưng không còn ở latest run." : "Từng có trong Following của target nhưng không còn ở latest run."}
                 users={changes.unfollowed}
                 tone="amber"
                 symbol="↘"
                 hasPreviousRun={hasPreviousCloudRun}
               />
               <BehaviorListCard
-                title={selfTarget ? "Followed you" : "New followers"}
-                description={selfTarget ? "Tài khoản mới xuất hiện trong follower list của bạn." : "Tài khoản mới bắt đầu follow target."}
+                title={selfTarget ? "New in your Followers" : "New followers"}
+                description={selfTarget ? "Mới xuất hiện trong Followers của bạn." : "Mới xuất hiện trong Followers của target."}
                 users={changes.newFollowers}
                 tone="green"
                 symbol="+"
                 hasPreviousRun={hasPreviousCloudRun}
               />
               <BehaviorListCard
-                title={selfTarget ? "You followed" : "Target followed"}
-                description={selfTarget ? "Tài khoản mới xuất hiện trong Following của bạn." : "Tài khoản target mới bắt đầu follow."}
+                title={selfTarget ? "New in your Following" : "New in target Following"}
+                description={selfTarget ? "Mới xuất hiện trong Following của bạn." : "Mới xuất hiện trong Following của target."}
                 users={changes.newFollowing}
                 tone="blue"
                 symbol="↗"
@@ -795,7 +796,7 @@ export default function Home() {
               <span className="section-tag"><i>05</i> History</span>
               <div>
                 <h2>One target history.<br />Across every device.</h2>
-                <p>Only finalized cloud runs appear here. Partial uploads and failed runs are excluded from comparison.</p>
+                <p>Only finalized cloud runs appear here. Partial uploads and failed runs are excluded from comparison. Time is the snapshot capture time, not upload completion time.</p>
               </div>
             </div>
 
@@ -805,10 +806,10 @@ export default function Home() {
                 <span>{cloudHistory.length} runs</span>
               </div>
               <div className="history-table">
-                <div className="history-row history-head"><span>Time</span><span>Followers</span><span>Following</span><span>Duration</span><span>Run</span></div>
+                <div className="history-row history-head"><span>Captured</span><span>Followers</span><span>Following</span><span>Duration</span><span>Run</span></div>
                 {cloudHistory.length ? cloudHistory.map((run) => (
                   <div className="history-row" key={run.id}>
-                    <span>{formatDate(run.finished_at || run.created_at)}</span>
+                    <span>{formatDate(run.captured_at || run.finished_at || run.created_at)}</span>
                     <span>{formatNumber(run.crawled_followers)}</span>
                     <span>{formatNumber(run.crawled_following)}</span>
                     <span>{formatDuration(run.duration_ms)}</span>
@@ -826,7 +827,7 @@ export default function Home() {
           <div className="footer-brand">
             <span className="brand-mark"><span /></span>
             <strong>QuetUnfollowIG</strong>
-            <p>{professionalMode ? "Supabase stores normalized relationship snapshots and SQL-computed diffs." : "See the people behind every follow and unfollow change."}</p>
+            <p>{professionalMode ? "Supabase stores normalized relationship snapshots and SQL-computed diffs." : "See the accounts behind every observed relationship change."}</p>
           </div>
           <div className="footer-links">
             <a href="#control">Control</a>
