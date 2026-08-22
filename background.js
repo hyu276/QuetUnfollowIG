@@ -1,3 +1,5 @@
+importScripts("cloud.js");
+
 const STORAGE_KEY = "quetUnfollowIGState";
 const PAIRING_KEY_STORAGE = "quetUnfollowIGPairingKey";
 const APP_ID = "936619743392459";
@@ -10,7 +12,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const jitter = () => 900 + Math.floor(Math.random() * 900);
 
 function emptyState() {
-  return { schemaVersion: 2, currentAccountId: null, accounts: {}, targets: {} };
+  return { schemaVersion: 3, currentAccountId: null, accounts: {}, targets: {} };
 }
 
 async function getState() {
@@ -18,7 +20,7 @@ async function getState() {
   const state = stored[STORAGE_KEY] || emptyState();
   if (!state.accounts) state.accounts = {};
   if (!state.targets) state.targets = {};
-  state.schemaVersion = 2;
+  state.schemaVersion = 3;
   return state;
 }
 
@@ -303,6 +305,7 @@ function makeWarnings(target, followers, following) {
 async function crawlNow(options = {}) {
   const crawlStartedAt = Date.now();
   const viewerId = await getLoggedInUserId();
+  await cloudRequireWorkspace();
   const target = await resolveTargetProfile(options?.targetUsername, viewerId);
 
   await emitProgress("followers", 0, 0, crawlStartedAt, target, { hasNextPage: true });
@@ -330,6 +333,12 @@ async function crawlNow(options = {}) {
     warnings: makeWarnings(target, followers, following)
   };
 
+  // Cloud commit is authoritative. If this fails, the crawl is not accepted as a successful snapshot.
+  const cloud = await cloudSyncSnapshot(snapshot, target, viewerId, chrome.runtime.getManifest().version);
+  snapshot.cloudRunId = cloud?.run?.id || null;
+  snapshot.cloudDiffSummary = cloud?.diffSummary || null;
+
+  // Local data remains a cache for fast rendering/backwards compatibility only.
   const state = await getState();
   state.currentAccountId = viewerId;
   const key = trackerKey(viewerId, target.id);
@@ -350,7 +359,6 @@ async function crawlNow(options = {}) {
   if (tracker.snapshots.length > MAX_HISTORY) tracker.snapshots = tracker.snapshots.slice(-MAX_HISTORY);
   state.targets[key] = tracker;
 
-  // Keep the original self-account dashboard backwards compatible.
   if (target.isSelf) {
     const account = state.accounts[viewerId] || { accountId: viewerId, baseline: null, snapshots: [] };
     if (!account.baseline) account.baseline = snapshot;
@@ -364,6 +372,7 @@ async function crawlNow(options = {}) {
     viewerId,
     target,
     snapshot,
+    cloud,
     isFirstSnapshot: tracker.snapshots.length === 1,
     baselineId: tracker.baseline.id,
     trackerKey: key
@@ -399,29 +408,48 @@ async function status() {
   let loggedInUserId = null;
   try { loggedInUserId = await getLoggedInUserId(); } catch (_) {}
   const state = await getState();
-  return { loggedInUserId, state };
+  const cloudConfig = await cloudGetConfig();
+  return { loggedInUserId, state, cloudConfig };
+}
+
+async function safeCloudTargetStatus(targetId) {
+  const config = await cloudGetConfig();
+  if (!config.configured) return { configured: false, workspace: null, status: null };
+  if (config.error) return { configured: true, workspace: config.workspace, status: null, error: config.error };
+  try {
+    const status = await cloudGetTargetStatus(targetId);
+    return { configured: true, workspace: config.workspace, status };
+  } catch (error) {
+    return { configured: true, workspace: config.workspace, status: null, error: error?.message || String(error) };
+  }
 }
 
 async function statusForWeb(options = {}) {
   let viewerId = null;
   try { viewerId = await getLoggedInUserId(); } catch (_) {}
-  if (!viewerId) return { loggedInUserId: null, target: null, tracker: null };
+  const cloudConfig = await cloudGetConfig();
+  if (!viewerId) return { loggedInUserId: null, target: null, tracker: null, cloudConfig, cloud: null };
 
   const rawTarget = normalizeUsername(options?.targetUsername);
   if (!rawTarget) {
     const state = await getState();
     const selfTracker = state.targets[trackerKey(viewerId, viewerId)] || null;
+    const target = { id: viewerId, username: "", isPrivate: false, isSelf: true, resolver: "session-self" };
+    const cloud = await safeCloudTargetStatus(viewerId);
     return {
       loggedInUserId: viewerId,
-      target: { id: viewerId, username: "", isPrivate: false, isSelf: true, resolver: "session-self" },
-      tracker: summarizeTracker(selfTracker)
+      target,
+      tracker: summarizeTracker(selfTracker),
+      cloudConfig,
+      cloud
     };
   }
 
   const target = await resolveTargetProfile(rawTarget, viewerId);
   const state = await getState();
   const tracker = state.targets[trackerKey(viewerId, target.id)] || null;
-  return { loggedInUserId: viewerId, target, tracker: summarizeTracker(tracker) };
+  const cloud = await safeCloudTargetStatus(target.id);
+  return { loggedInUserId: viewerId, target, tracker: summarizeTracker(tracker), cloudConfig, cloud };
 }
 
 async function resetBaseline(options = {}) {
@@ -431,10 +459,9 @@ async function resetBaseline(options = {}) {
   const key = trackerKey(viewerId, target.id);
   const tracker = state.targets[key];
   const latest = tracker?.snapshots?.at(-1);
-  if (!latest) throw new Error("Chưa có snapshot nào của target này để đặt làm baseline.");
+  if (!latest) throw new Error("Chưa có snapshot local nào của target này để đặt làm baseline.");
   tracker.baseline = latest;
   state.targets[key] = tracker;
-
   if (target.isSelf && state.accounts[viewerId]) state.accounts[viewerId].baseline = latest;
   await setState(state);
   return { target, baselineId: latest.id, crawledAt: latest.crawledAt };
@@ -445,6 +472,8 @@ async function handleWebRequest(message) {
   if (message?.action === "GET_STATUS") return statusForWeb(message?.payload || {});
   if (message?.action === "CRAWL_NOW") return crawlNow(message?.payload || {});
   if (message?.action === "RESET_BASELINE") return resetBaseline(message?.payload || {});
+  if (message?.action === "GET_CLOUD_TARGETS") return cloudListTargets();
+  if (message?.action === "GET_CLOUD_CONFIG") return cloudGetConfig();
   throw new Error("Web action không được hỗ trợ.");
 }
 
@@ -471,7 +500,12 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     CRAWL_TARGET: () => crawlNow({ targetUsername: message?.targetUsername }),
     RESET_BASELINE: () => resetBaseline(message?.payload || {}),
     GET_PAIRING_KEY: async () => ({ pairingKey: await getPairingKey() }),
-    ROTATE_PAIRING_KEY: async () => ({ pairingKey: await rotatePairingKey() })
+    ROTATE_PAIRING_KEY: async () => ({ pairingKey: await rotatePairingKey() }),
+    GET_CLOUD_CONFIG: cloudGetConfig,
+    CREATE_CLOUD_WORKSPACE: () => cloudCreateWorkspace(message?.name || "QuetUnfollowIG Workspace"),
+    CONNECT_CLOUD_WORKSPACE: () => cloudConnectWorkspace(message?.workspaceKey),
+    DISCONNECT_CLOUD_WORKSPACE: cloudDisconnectWorkspace,
+    GET_CLOUD_TARGETS: cloudListTargets
   };
   const handler = handlers[message.type];
   if (!handler) return false;
