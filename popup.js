@@ -4,9 +4,10 @@ const dashboardBtn = document.getElementById("dashboard");
 const pairingKeyEl = document.getElementById("pairingKey");
 const copyKeyBtn = document.getElementById("copyKey");
 const rotateKeyBtn = document.getElementById("rotateKey");
+const targetInput = document.getElementById("targetUsername");
 
-function send(type) {
-  return chrome.runtime.sendMessage({ type });
+function send(type, extra = {}) {
+  return chrome.runtime.sendMessage({ type, ...extra });
 }
 
 async function refreshStatus() {
@@ -17,7 +18,7 @@ async function refreshStatus() {
   }
   const id = response.result.loggedInUserId;
   statusEl.textContent = id
-    ? `Đã nhận diện phiên Instagram · ID ${id}`
+    ? `Phiên Instagram sẵn sàng · viewer ID ${id}`
     : "Chưa nhận diện được phiên Instagram đang đăng nhập.";
 }
 
@@ -50,19 +51,29 @@ rotateKeyBtn.addEventListener("click", async () => {
 });
 
 crawlBtn.addEventListener("click", async () => {
+  const targetUsername = targetInput.value.trim();
   crawlBtn.disabled = true;
   crawlBtn.textContent = "Đang crawl…";
-  statusEl.textContent = "Đang tải Followers rồi Following. Có thể mất một lúc nếu danh sách lớn.";
-  const response = await send("CRAWL_NOW");
+  statusEl.textContent = targetUsername
+    ? `Đang resolve và crawl ${targetUsername.startsWith("@") ? targetUsername : `@${targetUsername}`}…`
+    : "Đang crawl tài khoản Instagram hiện tại…";
+
+  const response = targetUsername
+    ? await send("CRAWL_TARGET", { targetUsername })
+    : await send("CRAWL_NOW");
+
   if (!response?.ok) {
     statusEl.textContent = response?.error || "Crawl thất bại.";
     crawlBtn.disabled = false;
-    crawlBtn.textContent = "Crawl ngay";
+    crawlBtn.textContent = "Crawl target";
     return;
   }
-  statusEl.textContent = `Xong · ${response.result.snapshot.counts.followers} followers · ${response.result.snapshot.counts.following} following`;
+
+  const { snapshot, target } = response.result;
+  const label = target?.username ? `@${target.username}` : `ID ${target?.id || snapshot.accountId}`;
+  statusEl.textContent = `Xong ${label} · ${snapshot.counts.followers} followers · ${snapshot.counts.following} following`;
   crawlBtn.disabled = false;
-  crawlBtn.textContent = "Crawl lại";
+  crawlBtn.textContent = "Crawl lại target";
 });
 
 dashboardBtn.addEventListener("click", () => {
