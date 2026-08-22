@@ -11,6 +11,12 @@
     <div class="brand">QuetUnfollowIG</div>
     <p id="status" class="status">Đang kiểm tra phiên Instagram…</p>
 
+    <div class="target-card">
+      <span class="label">Target account</span>
+      <input id="targetUsername" class="target-input" placeholder="@username · để trống = tài khoản của bạn" autocomplete="off" spellcheck="false" />
+      <p class="target-help">Public account hoặc private account mà session hiện tại thực sự có quyền xem Followers/Following.</p>
+    </div>
+
     <div class="pairing-card">
       <span class="label">Live website pairing key</span>
       <div class="pairing-row">
@@ -20,9 +26,9 @@
       <button id="rotateKey" class="text-button">Tạo pairing key mới</button>
     </div>
 
-    <button id="crawl" class="primary">Crawl ngay</button>
+    <button id="crawl" class="primary">Crawl target</button>
     <button id="dashboard" class="secondary">Mở Dashboard</button>
-    <p class="hint">Không chia sẻ pairing key. Dữ liệu chỉ lưu trong trình duyệt này.</p>
+    <p class="hint">Không chia sẻ pairing key. Snapshot của mỗi target được tách riêng theo tài khoản Instagram đang đăng nhập.</p>
   </main>
   <script src="popup.js"></script>
 </body>
