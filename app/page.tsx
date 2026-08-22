@@ -111,8 +111,17 @@ type PendingRequest = {
   reject: (reason?: any) => void;
   timeout: ReturnType<typeof setTimeout>;
 };
+type BehaviorListProps = {
+  title: string;
+  description: string;
+  users: IGUser[];
+  tone: "red" | "amber" | "green" | "blue";
+  symbol: string;
+  hasPreviousRun: boolean;
+};
 
 const SOURCE = "quet-unfollow-ig-web";
+const PROFESSIONAL_MODE_KEY = "quet-unfollow-professional-mode";
 
 function formatNumber(value?: number | null) {
   return value == null ? "—" : new Intl.NumberFormat("vi-VN").format(value);
@@ -150,6 +159,51 @@ function userKey(user: IGUser) {
   return user.id ? `id:${user.id}` : `username:${user.username.toLowerCase()}`;
 }
 
+function BehaviorListCard({ title, description, users, tone, symbol, hasPreviousRun }: BehaviorListProps) {
+  return (
+    <article className={`behavior-card hazy-card tone-${tone}`}>
+      <div className="behavior-head">
+        <div className="behavior-title">
+          <span className="behavior-symbol">{symbol}</span>
+          <div>
+            <h3>{title}</h3>
+            <p>{description}</p>
+          </div>
+        </div>
+        <strong className="behavior-count">{hasPreviousRun ? formatNumber(users.length) : "—"}</strong>
+      </div>
+
+      <div className="behavior-list">
+        {!hasPreviousRun ? (
+          <div className="behavior-empty">Cần ít nhất 2 complete cloud runs để xác định tài khoản nào đã thay đổi.</div>
+        ) : users.length ? (
+          users.map((user) => (
+            <div className="behavior-user" key={userKey(user)}>
+              <div className="behavior-avatar">{user.username?.slice(0, 1).toUpperCase() || "?"}</div>
+              <div className="behavior-user-main">
+                <b>@{user.username || "unknown"}</b>
+                <small>{user.fullName || `Instagram ID ${user.id || "unknown"}`}</small>
+              </div>
+              {user.username ? (
+                <a
+                  className="behavior-open"
+                  href={`https://www.instagram.com/${encodeURIComponent(user.username)}/`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Profile
+                </a>
+              ) : null}
+            </div>
+          ))
+        ) : (
+          <div className="behavior-empty">Không có tài khoản nào thuộc hành vi này trong lần so sánh gần nhất.</div>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export default function Home() {
   const [bridgeReady, setBridgeReady] = useState(false);
   const [bridgeVersion, setBridgeVersion] = useState("—");
@@ -160,13 +214,16 @@ export default function Home() {
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<ProgressEvent | null>(null);
   const [logs, setLogs] = useState<ProgressEvent[]>([]);
+  const [professionalMode, setProfessionalMode] = useState(false);
   const pending = useRef(new Map<string, PendingRequest>());
 
   useEffect(() => {
     const savedKey = window.localStorage.getItem("quet-unfollow-pairing-key");
     const savedTarget = window.localStorage.getItem("quet-unfollow-target");
+    const savedMode = window.localStorage.getItem(PROFESSIONAL_MODE_KEY);
     if (savedKey) setPairingKey(savedKey);
     if (savedTarget) setTargetUsername(savedTarget);
+    if (savedMode === "on") setProfessionalMode(true);
 
     const onPointerMove = (event: PointerEvent) => {
       const x = (event.clientX / Math.max(window.innerWidth, 1)) * 100;
@@ -220,6 +277,14 @@ export default function Home() {
       pending.current.clear();
     };
   }, []);
+
+  function toggleProfessionalMode() {
+    setProfessionalMode((current) => {
+      const next = !current;
+      window.localStorage.setItem(PROFESSIONAL_MODE_KEY, next ? "on" : "off");
+      return next;
+    });
+  }
 
   function request<T>(action: "GET_STATUS" | "CRAWL_NOW", payload: Record<string, unknown> = {}, key = pairingKey) {
     return new Promise<T>((resolve, reject) => {
@@ -352,13 +417,27 @@ export default function Home() {
           </a>
           <div className="nav-links">
             <a href="#control">Control</a>
-            <a href="#realtime">Realtime</a>
             <a href="#changes">Changes</a>
-            <a href="#history">History</a>
+            <a href="#who-changed">Who changed</a>
+            {professionalMode ? <a href="#realtime">Realtime</a> : null}
+            {professionalMode ? <a href="#history">History</a> : null}
           </div>
-          <div className={`nav-status ${bridgeReady ? "is-online" : "is-offline"}`}>
-            <span className="nav-status-dot" />
-            <span>{bridgeReady ? `Bridge ${bridgeVersion}` : "Bridge offline"}</span>
+          <div className="nav-tools">
+            <button
+              className={`mode-toggle ${professionalMode ? "is-on" : ""}`}
+              onClick={toggleProfessionalMode}
+              aria-pressed={professionalMode}
+              title="Bật/tắt các số liệu và công cụ kỹ thuật"
+            >
+              <span className="mode-switch" />
+              <span className="mode-toggle-label">Professional {professionalMode ? "ON" : "OFF"}</span>
+            </button>
+            {professionalMode ? (
+              <div className={`nav-status ${bridgeReady ? "is-online" : "is-offline"}`}>
+                <span className="nav-status-dot" />
+                <span>{bridgeReady ? `Bridge ${bridgeVersion}` : "Bridge offline"}</span>
+              </div>
+            ) : null}
           </div>
         </div>
       </nav>
@@ -373,16 +452,16 @@ export default function Home() {
 
         <div className="hero-copy">
           <div className="hero-mark reveal-1"><span /></div>
-          <div className="hero-title" aria-label="One history. Every device.">
-            <span className="word reveal-2">One history.</span>
-            <span className="word reveal-3">Every device.</span>
+          <div className="hero-title" aria-label="Know exactly who changed.">
+            <span className="word reveal-2">Know exactly</span>
+            <span className="word reveal-3">who changed.</span>
           </div>
           <p className="hero-description reveal-4">
-            Crawl any Instagram relationship list your signed-in session can see. Complete snapshots are committed to Supabase, then compared with the previous complete run for that target — no matter which device made it.
+            Không chỉ đếm unfollow hay new follow. QuetUnfollowIG lưu snapshot trên Supabase và chỉ ra chính xác tài khoản nào đã thay đổi giữa hai lần crawl hoàn chỉnh gần nhất.
           </p>
           <div className="hero-actions reveal-5">
-            <a className="button button-primary" href="#control">Open cloud console</a>
-            <a className="button button-dark" href="#changes">See cloud diff <span>↘</span></a>
+            <a className="button button-primary" href="#control">Open tracker</a>
+            <a className="button button-dark" href="#who-changed">See account lists <span>↘</span></a>
           </div>
         </div>
 
@@ -391,8 +470,8 @@ export default function Home() {
           <div className="hero-console">
             <div className="console-bar">
               <div className="console-dots"><span /><span /><span /></div>
-              <div className="console-title">supabase / {target?.username ? `@${target.username}` : "target"}</div>
-              <div className={`console-live ${busy ? "is-running" : ""}`}><span />{busy ? "CRAWLING" : cloudConnected ? "CLOUD READY" : "SETUP CLOUD"}</div>
+              <div className="console-title">{professionalMode ? `supabase / ${target?.username ? `@${target.username}` : "target"}` : targetLabel(target, status?.loggedInUserId)}</div>
+              <div className={`console-live ${busy ? "is-running" : ""}`}><span />{busy ? "CRAWLING" : cloudConnected ? "READY" : "SETUP"}</div>
             </div>
             <div className="console-body">
               <div className="console-profile">
@@ -400,28 +479,34 @@ export default function Home() {
                 <div>
                   <span className="console-label">TARGET</span>
                   <strong>{targetLabel(target, status?.loggedInUserId)}</strong>
-                  <small>{target ? `${target.isPrivate ? "Private" : "Public"} · ${target.resolver || "resolved"}` : "Waiting for connection"}</small>
+                  <small>{target ? `${target.isPrivate ? "Private" : "Public"}${professionalMode ? ` · ${target.resolver || "resolved"}` : ""}` : "Waiting for connection"}</small>
                 </div>
               </div>
               <div className="console-numbers">
                 <div><span>Followers</span><strong>{formatNumber(followerCount)}</strong></div>
                 <div><span>Following</span><strong>{formatNumber(followingCount)}</strong></div>
-                <div><span>Cloud runs</span><strong>{cloudHistory.length}</strong></div>
+                <div><span>{professionalMode ? "Cloud runs" : "Lost followers"}</span><strong>{professionalMode ? cloudHistory.length : hasPreviousCloudRun ? changes.lostFollowers.length : "—"}</strong></div>
               </div>
-              <div className="console-progress">
-                <div className="console-progress-row">
-                  <span>{progress ? `${progress.kind} · page ${progress.page}` : "Crawler idle"}</span>
-                  <strong>{progress ? `${formatNumber(progress.loaded)} received` : cloudLatest ? "Last run complete" : "No cloud run"}</strong>
+              {professionalMode ? (
+                <div className="console-progress">
+                  <div className="console-progress-row">
+                    <span>{progress ? `${progress.kind} · page ${progress.page}` : "Crawler idle"}</span>
+                    <strong>{progress ? `${formatNumber(progress.loaded)} received` : cloudLatest ? "Last run complete" : "No cloud run"}</strong>
+                  </div>
+                  <div className={`progress-track ${busy && progressPercent == null ? "is-indeterminate" : ""}`}>
+                    <span style={progressPercent != null ? { width: `${progressPercent}%` } : undefined} />
+                  </div>
+                  <div className="console-progress-meta">
+                    <span>latency {formatDuration(progress?.pageLatencyMs)}</span>
+                    <span>elapsed {formatDuration(progress?.elapsedMs)}</span>
+                    <span>next {progress?.hasNextPage == null ? "—" : progress.hasNextPage ? "yes" : "no"}</span>
+                  </div>
                 </div>
-                <div className={`progress-track ${busy && progressPercent == null ? "is-indeterminate" : ""}`}>
-                  <span style={progressPercent != null ? { width: `${progressPercent}%` } : undefined} />
+              ) : (
+                <div className="simple-mode-note">
+                  <b>Professional mode đang OFF.</b> Trang chỉ hiển thị các chỉ số chính và danh sách tài khoản có hành vi thay đổi.
                 </div>
-                <div className="console-progress-meta">
-                  <span>latency {formatDuration(progress?.pageLatencyMs)}</span>
-                  <span>elapsed {formatDuration(progress?.elapsedMs)}</span>
-                  <span>next {progress?.hasNextPage == null ? "—" : progress.hasNextPage ? "yes" : "no"}</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -432,8 +517,8 @@ export default function Home() {
           <div className="section-heading">
             <span className="section-tag"><i>01</i> Control</span>
             <div>
-              <h2>Point the crawler.<br />Commit the truth.</h2>
-              <p>Pair the website with the extension, choose a target, and let the extension crawl with your Instagram session. Supabase only receives the resulting relationship snapshot — never the Instagram cookie.</p>
+              <h2>Choose an account.<br />Run a comparison.</h2>
+              <p>Pair main site với extension, chọn target rồi crawl. Supabase giữ complete history để lần crawl sau có thể xác định chính xác ai đã follow/unfollow.</p>
             </div>
           </div>
 
@@ -441,8 +526,9 @@ export default function Home() {
             <div className="control-copy">
               <span className="mini-label">PAIRING + TARGET</span>
               <h3>Choose what to inspect.</h3>
-              <p>Configure a Cloud Workspace in the extension popup first. Leave target blank for your own account, or paste an @username, username, or Instagram profile URL.</p>
+              <p>Để trống target để crawl tài khoản đang đăng nhập, hoặc nhập @username/profile URL của tài khoản mà session hiện tại có quyền xem.</p>
               <div className={`bridge-inline ${bridgeReady ? "is-online" : ""}`}><span />{bridgeReady ? "Extension bridge detected" : "Reload extension to connect"}</div>
+              <div className="mode-description"><b>Professional mode:</b> {professionalMode ? "technical telemetry + validation + history visible" : "simplified consumer view"}</div>
             </div>
             <div className="control-form">
               <label>
@@ -454,219 +540,300 @@ export default function Home() {
                 <input value={targetUsername} onChange={(e) => setTargetUsername(e.target.value)} placeholder="@target_username · blank = me" spellCheck={false} />
               </label>
               <div className="control-buttons">
-                <button className="button button-white" onClick={connect} disabled={!bridgeReady || busy}>Resolve + cloud status</button>
-                <button className="button button-primary" onClick={crawl} disabled={!status?.loggedInUserId || !cloudConnected || busy}>{busy ? "Crawling + syncing…" : "Run cloud crawl"}</button>
+                <button className="button button-white" onClick={connect} disabled={!bridgeReady || busy}>Connect</button>
+                <button className="button button-primary" onClick={crawl} disabled={!status?.loggedInUserId || !cloudConnected || busy}>{busy ? "Crawling + syncing…" : "Run crawl"}</button>
               </div>
             </div>
             {error ? <div className="notice notice-error"><span>!</span><p>{error}</p></div> : null}
-            {viewerChanged ? <div className="notice notice-warning"><span>!</span><p>The previous complete run used a different Instagram viewer. The target diff is still computed, but confidence is lower for private accounts because visibility can differ by viewer.</p></div> : null}
             {cloudEnvelope?.error ? <div className="notice notice-error"><span>!</span><p>Cloud: {cloudEnvelope.error}</p></div> : null}
-            {localLatest?.warnings?.length ? <div className="notice notice-warning"><span>!</span><p>{localLatest.warnings.join(" ")}</p></div> : null}
+            {professionalMode && viewerChanged ? <div className="notice notice-warning"><span>!</span><p>The previous complete run used a different Instagram viewer. Diff confidence is lower for private accounts.</p></div> : null}
+            {professionalMode && localLatest?.warnings?.length ? <div className="notice notice-warning"><span>!</span><p>{localLatest.warnings.join(" ")}</p></div> : null}
           </div>
 
-          <div className="metric-cards">
-            <article className="metric-card hazy-card">
-              <div className="metric-icon">01</div>
-              <span>Cloud workspace</span>
-              <strong>{cloudConnected ? "Connected" : "—"}</strong>
-              <small>{status?.cloudConfig?.workspace?.name || "Configure in extension popup"}</small>
-            </article>
-            <article className="metric-card hazy-card">
-              <div className="metric-icon">02</div>
-              <span>Target</span>
-              <strong className="target-metric">{targetLabel(target, status?.loggedInUserId)}</strong>
-              <small>{target ? `${target.isPrivate ? "Private" : "Public"} · ${target.resolver || "resolver n/a"}` : "Not resolved"}</small>
-            </article>
-            <article className="metric-card hazy-card">
-              <div className="metric-icon">03</div>
-              <span>Followers</span>
-              <strong>{formatNumber(followerCount)}</strong>
-              <small>{cloudLatest ? "Supabase complete run" : "No cloud snapshot"}</small>
-            </article>
-            <article className="metric-card hazy-card">
-              <div className="metric-icon">04</div>
-              <span>Following</span>
-              <strong>{formatNumber(followingCount)}</strong>
-              <small>{cloudLatest ? formatDate(cloudLatest.finished_at || cloudLatest.created_at) : "No cloud snapshot"}</small>
-            </article>
-          </div>
+          {professionalMode ? (
+            <div className="metric-cards">
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">01</div>
+                <span>Cloud workspace</span>
+                <strong>{cloudConnected ? "Connected" : "—"}</strong>
+                <small>{status?.cloudConfig?.workspace?.name || "Configure in extension popup"}</small>
+              </article>
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">02</div>
+                <span>Target</span>
+                <strong className="target-metric">{targetLabel(target, status?.loggedInUserId)}</strong>
+                <small>{target ? `${target.isPrivate ? "Private" : "Public"} · ${target.resolver || "resolver n/a"}` : "Not resolved"}</small>
+              </article>
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">03</div>
+                <span>Followers</span>
+                <strong>{formatNumber(followerCount)}</strong>
+                <small>{cloudLatest ? "Supabase complete run" : "No cloud snapshot"}</small>
+              </article>
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">04</div>
+                <span>Following</span>
+                <strong>{formatNumber(followingCount)}</strong>
+                <small>{cloudLatest ? formatDate(cloudLatest.finished_at || cloudLatest.created_at) : "No cloud snapshot"}</small>
+              </article>
+            </div>
+          ) : (
+            <div className="metric-cards consumer-metrics">
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">@</div>
+                <span>Target</span>
+                <strong className="target-metric">{targetLabel(target, status?.loggedInUserId)}</strong>
+                <small>{target ? (target.isPrivate ? "Private account" : "Public account") : "Connect to resolve"}</small>
+              </article>
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">↓</div>
+                <span>Followers</span>
+                <strong>{formatNumber(followerCount)}</strong>
+                <small>Latest complete crawl</small>
+              </article>
+              <article className="metric-card hazy-card">
+                <div className="metric-icon">↑</div>
+                <span>Following</span>
+                <strong>{formatNumber(followingCount)}</strong>
+                <small>Latest complete crawl</small>
+              </article>
+            </div>
+          )}
 
-          {target ? <div className="target-strip hazy-card">
-            <span><b>Target ID</b>{target.id}</span>
-            <span><b>Cloud runs</b>{cloudHistory.length}</span>
-            <span><b>Previous run</b>{cloudLatest?.previous_run_id ? cloudLatest.previous_run_id.slice(0, 8) : "None"}</span>
-            <span><b>Current viewer</b>{cloudStatus?.comparison?.currentViewerId || status?.loggedInUserId || "—"}</span>
-            <span><b>Last duration</b>{formatDuration(cloudLatest?.duration_ms ?? localLatest?.durationMs)}</span>
-          </div> : null}
+          {professionalMode && target ? (
+            <div className="target-strip hazy-card">
+              <span><b>Target ID</b>{target.id}</span>
+              <span><b>Cloud runs</b>{cloudHistory.length}</span>
+              <span><b>Previous run</b>{cloudLatest?.previous_run_id ? cloudLatest.previous_run_id.slice(0, 8) : "None"}</span>
+              <span><b>Current viewer</b>{cloudStatus?.comparison?.currentViewerId || status?.loggedInUserId || "—"}</span>
+              <span><b>Last duration</b>{formatDuration(cloudLatest?.duration_ms ?? localLatest?.durationMs)}</span>
+            </div>
+          ) : null}
         </div>
       </section>
 
-      <section className="content-section grey-section" id="realtime">
-        <div className="section-wrap">
-          <div className="section-heading">
-            <span className="section-tag"><i>02</i> Realtime</span>
-            <div>
-              <h2>Watch every page.<br />Trust only complete runs.</h2>
-              <p>The extension streams Instagram pagination in realtime. A run becomes historical truth only after Supabase verifies that every crawled follower and following membership was uploaded.</p>
+      {professionalMode ? (
+        <section className="content-section grey-section" id="realtime">
+          <div className="section-wrap">
+            <div className="section-heading">
+              <span className="section-tag"><i>02</i> Realtime</span>
+              <div>
+                <h2>Watch every page.<br />Trust only complete runs.</h2>
+                <p>Telemetry cho biết pagination, latency và trạng thái validation của crawl hiện tại.</p>
+              </div>
+            </div>
+
+            <div className="realtime-grid">
+              <article className="telemetry-card hazy-card">
+                <div className="card-topline">
+                  <div><span className="mini-label">LIVE TELEMETRY</span><h3>Crawl progress</h3></div>
+                  <span className={`run-pill ${busy ? "is-running" : ""}`}><i />{busy ? "RUNNING" : "IDLE"}</span>
+                </div>
+                <div className="telemetry-hero">
+                  <span>{progress ? progress.kind : "No active run"}</span>
+                  <strong>{progress ? `Page ${progress.page}` : "—"}</strong>
+                  <small>{progress ? `${formatNumber(progress.loaded)} accounts received${progress.target?.username ? ` from @${progress.target.username}` : ""}` : "Run a cloud crawl to stream telemetry"}</small>
+                </div>
+                <div className="telemetry-stats">
+                  <span><small>Elapsed</small><b>{formatDuration(progress?.elapsedMs)}</b></span>
+                  <span><small>Page latency</small><b>{formatDuration(progress?.pageLatencyMs)}</b></span>
+                  <span><small>Next page</small><b>{progress?.hasNextPage == null ? "—" : progress.hasNextPage ? "Yes" : "No"}</b></span>
+                </div>
+                <div className="log-window">
+                  <div className="log-header"><span>TIME</span><span>LIST</span><span>PAGE</span><span>USERS</span><span>LATENCY</span></div>
+                  {logs.length ? logs.slice().reverse().map((item, index) => (
+                    <div className="log-entry" key={`${item.kind}-${item.page}-${item.at || index}-${index}`}>
+                      <code>{item.at ? new Date(item.at).toLocaleTimeString("vi-VN") : "now"}</code>
+                      <span>{item.kind}</span>
+                      <span>{item.page}</span>
+                      <span>{formatNumber(item.loaded)}</span>
+                      <span>{item.pageLatencyMs != null ? `${item.pageLatencyMs} ms` : "—"}</span>
+                    </div>
+                  )) : <div className="empty-state">Telemetry will appear here.</div>}
+                </div>
+              </article>
+
+              <article className="integrity-card hazy-card">
+                <div className="card-topline">
+                  <div><span className="mini-label">CLOUD VALIDATION</span><h3>Cross-device integrity</h3></div>
+                  <div className={`integrity-score ${integrityPerfect ? "is-perfect" : ""}`}>
+                    <strong>{passCount}/{validations.length}</strong>
+                    <span>{integrityPerfect ? "PASS" : "CHECK"}</span>
+                  </div>
+                </div>
+                <div className="integrity-list">
+                  {validations.map((item) => (
+                    <div className="integrity-item" key={item.label}>
+                      <span className={`integrity-icon ${item.ok ? "ok" : "fail"}`}>{item.ok ? "✓" : "×"}</span>
+                      <div><b>{item.label}</b><small>{item.detail}</small></div>
+                    </div>
+                  ))}
+                </div>
+              </article>
             </div>
           </div>
-
-          <div className="realtime-grid">
-            <article className="telemetry-card hazy-card">
-              <div className="card-topline">
-                <div><span className="mini-label">LIVE TELEMETRY</span><h3>Crawl progress</h3></div>
-                <span className={`run-pill ${busy ? "is-running" : ""}`}><i />{busy ? "RUNNING" : "IDLE"}</span>
-              </div>
-              <div className="telemetry-hero">
-                <span>{progress ? progress.kind : "No active run"}</span>
-                <strong>{progress ? `Page ${progress.page}` : "—"}</strong>
-                <small>{progress ? `${formatNumber(progress.loaded)} accounts received${progress.target?.username ? ` from @${progress.target.username}` : ""}` : "Run a cloud crawl to stream telemetry"}</small>
-              </div>
-              <div className="telemetry-stats">
-                <span><small>Elapsed</small><b>{formatDuration(progress?.elapsedMs)}</b></span>
-                <span><small>Page latency</small><b>{formatDuration(progress?.pageLatencyMs)}</b></span>
-                <span><small>Next page</small><b>{progress?.hasNextPage == null ? "—" : progress.hasNextPage ? "Yes" : "No"}</b></span>
-              </div>
-              <div className="log-window">
-                <div className="log-header"><span>TIME</span><span>LIST</span><span>PAGE</span><span>USERS</span><span>LATENCY</span></div>
-                {logs.length ? logs.slice().reverse().map((item, index) => (
-                  <div className="log-entry" key={`${item.kind}-${item.page}-${item.at || index}-${index}`}>
-                    <code>{item.at ? new Date(item.at).toLocaleTimeString("vi-VN") : "now"}</code>
-                    <span>{item.kind}</span>
-                    <span>{item.page}</span>
-                    <span>{formatNumber(item.loaded)}</span>
-                    <span>{item.pageLatencyMs != null ? `${item.pageLatencyMs} ms` : "—"}</span>
-                  </div>
-                )) : <div className="empty-state">Telemetry will appear here.</div>}
-              </div>
-            </article>
-
-            <article className="integrity-card hazy-card">
-              <div className="card-topline">
-                <div><span className="mini-label">CLOUD VALIDATION</span><h3>Cross-device integrity</h3></div>
-                <div className={`integrity-score ${integrityPerfect ? "is-perfect" : ""}`}>
-                  <strong>{passCount}/{validations.length}</strong>
-                  <span>{integrityPerfect ? "PASS" : "CHECK"}</span>
-                </div>
-              </div>
-              <div className="integrity-list">
-                {validations.map((item) => (
-                  <div className="integrity-item" key={item.label}>
-                    <span className={`integrity-icon ${item.ok ? "ok" : "fail"}`}>{item.ok ? "✓" : "×"}</span>
-                    <div><b>{item.label}</b><small>{item.detail}</small></div>
-                  </div>
-                ))}
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
+        </section>
+      ) : null}
 
       <section className="content-section" id="changes">
         <div className="section-wrap">
           <div className="section-heading">
-            <span className="section-tag"><i>03</i> Changes</span>
+            <span className="section-tag"><i>{professionalMode ? "03" : "02"}</i> Changes</span>
             <div>
-              <h2>The previous run,<br />wherever it happened.</h2>
-              <p>These differences are computed in PostgreSQL against the previous complete run for the same target in the same Cloud Workspace — not against a browser-local baseline.</p>
+              <h2>What changed<br />since the last crawl?</h2>
+              <p>So sánh latest complete run với complete run ngay trước đó của cùng target trong Cloud Workspace.</p>
             </div>
           </div>
 
           <div className="change-grid">
             <article className="change-card hazy-card tone-red">
               <div className="change-symbol">−</div>
-              <span>{selfTarget ? "Lost followers" : "Target lost followers"}</span>
+              <span>{selfTarget ? "Unfollowed you" : "Target lost followers"}</span>
               <strong>{cloudLatest ? formatNumber(changes.lostFollowers.length) : "—"}</strong>
-              <small>{hasPreviousCloudRun ? "previous complete run → latest" : "first cloud run"}</small>
+              <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-amber">
               <div className="change-symbol">↘</div>
               <span>{selfTarget ? "You unfollowed" : "Target unfollowed"}</span>
               <strong>{cloudLatest ? formatNumber(changes.unfollowed.length) : "—"}</strong>
-              <small>{hasPreviousCloudRun ? "previous complete run → latest" : "first cloud run"}</small>
+              <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-green">
               <div className="change-symbol">+</div>
-              <span>New followers</span>
+              <span>{selfTarget ? "Followed you" : "New followers"}</span>
               <strong>{cloudLatest ? formatNumber(changes.newFollowers.length) : "—"}</strong>
-              <small>Supabase diff</small>
+              <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
             <article className="change-card hazy-card tone-blue">
               <div className="change-symbol">↗</div>
-              <span>New following</span>
+              <span>{selfTarget ? "You followed" : "Target followed"}</span>
               <strong>{cloudLatest ? formatNumber(changes.newFollowing.length) : "—"}</strong>
-              <small>Supabase diff</small>
+              <small>{hasPreviousCloudRun ? "previous run → latest" : "need another complete run"}</small>
             </article>
           </div>
 
-          <div className="sample-grid">
-            <article className="sample-card hazy-card">
-              <div className="card-topline"><div><span className="mini-label">CLOUD SAMPLE</span><h3>Followers</h3></div><span>{sampleFollowers.length} shown</span></div>
-              <div className="people-list">
-                {sampleFollowers.length ? sampleFollowers.map((user) => (
-                  <div className="person-row" key={userKey(user)}>
-                    <div className="person-avatar">{user.username?.slice(0, 1).toUpperCase() || "?"}</div>
-                    <div><b>@{user.username || "unknown"}</b><small>{user.fullName || "Instagram user"}</small></div>
-                    <code>{user.id || "no-id"}</code>
-                  </div>
-                )) : <div className="empty-state tall">No follower data.</div>}
+          <div className="change-people-section" id="who-changed">
+            <div className="section-heading">
+              <span className="section-tag"><i>{professionalMode ? "04" : "03"}</i> Who changed</span>
+              <div>
+                <h2>Not just how many.<br />Exactly who.</h2>
+                <p>Mỗi danh sách dưới đây là toàn bộ account được PostgreSQL xác định là thay đổi giữa hai complete runs gần nhất — không phải sample.</p>
               </div>
-            </article>
-            <article className="sample-card hazy-card">
-              <div className="card-topline"><div><span className="mini-label">CLOUD SAMPLE</span><h3>Following</h3></div><span>{sampleFollowing.length} shown</span></div>
-              <div className="people-list">
-                {sampleFollowing.length ? sampleFollowing.map((user) => (
-                  <div className="person-row" key={userKey(user)}>
-                    <div className="person-avatar">{user.username?.slice(0, 1).toUpperCase() || "?"}</div>
-                    <div><b>@{user.username || "unknown"}</b><small>{user.fullName || "Instagram user"}</small></div>
-                    <code>{user.id || "no-id"}</code>
-                  </div>
-                )) : <div className="empty-state tall">No following data.</div>}
-              </div>
-            </article>
-          </div>
-        </div>
-      </section>
+            </div>
 
-      <section className="content-section grey-section" id="history">
-        <div className="section-wrap">
-          <div className="section-heading">
-            <span className="section-tag"><i>04</i> History</span>
-            <div>
-              <h2>One target history.<br />Across every device.</h2>
-              <p>Only finalized cloud runs appear here. Partial uploads and failed runs are excluded from comparison, so a network interruption cannot masquerade as a mass unfollow event.</p>
+            <div className="behavior-grid">
+              <BehaviorListCard
+                title={selfTarget ? "Unfollowed you" : "No longer follows target"}
+                description={selfTarget ? "Tài khoản từng follow bạn ở lần trước nhưng không còn ở latest run." : "Tài khoản biến mất khỏi follower list của target."}
+                users={changes.lostFollowers}
+                tone="red"
+                symbol="−"
+                hasPreviousRun={hasPreviousCloudRun}
+              />
+              <BehaviorListCard
+                title={selfTarget ? "You unfollowed" : "Target unfollowed"}
+                description={selfTarget ? "Tài khoản bạn từng follow nhưng hiện không còn trong Following." : "Tài khoản bị target bỏ follow kể từ lần crawl trước."}
+                users={changes.unfollowed}
+                tone="amber"
+                symbol="↘"
+                hasPreviousRun={hasPreviousCloudRun}
+              />
+              <BehaviorListCard
+                title={selfTarget ? "Followed you" : "New followers"}
+                description={selfTarget ? "Tài khoản mới xuất hiện trong follower list của bạn." : "Tài khoản mới bắt đầu follow target."}
+                users={changes.newFollowers}
+                tone="green"
+                symbol="+"
+                hasPreviousRun={hasPreviousCloudRun}
+              />
+              <BehaviorListCard
+                title={selfTarget ? "You followed" : "Target followed"}
+                description={selfTarget ? "Tài khoản mới xuất hiện trong Following của bạn." : "Tài khoản target mới bắt đầu follow."}
+                users={changes.newFollowing}
+                tone="blue"
+                symbol="↗"
+                hasPreviousRun={hasPreviousCloudRun}
+              />
             </div>
           </div>
 
-          <article className="history-card hazy-card">
-            <div className="card-topline">
-              <div><span className="mini-label">SUPABASE HISTORY</span><h3>Complete runs · {targetLabel(target, status?.loggedInUserId)}</h3></div>
-              <span>{cloudHistory.length} runs</span>
-            </div>
-            <div className="history-table">
-              <div className="history-row history-head"><span>Time</span><span>Followers</span><span>Following</span><span>Duration</span><span>Run</span></div>
-              {cloudHistory.length ? cloudHistory.map((run) => (
-                <div className="history-row" key={run.id}>
-                  <span>{formatDate(run.finished_at || run.created_at)}</span>
-                  <span>{formatNumber(run.crawled_followers)}</span>
-                  <span>{formatNumber(run.crawled_following)}</span>
-                  <span>{formatDuration(run.duration_ms)}</span>
-                  <code>{run.id.slice(0, 10)}</code>
+          {professionalMode ? (
+            <div className="sample-grid">
+              <article className="sample-card hazy-card">
+                <div className="card-topline"><div><span className="mini-label">LATEST CLOUD SAMPLE</span><h3>Followers</h3></div><span>{sampleFollowers.length} shown</span></div>
+                <div className="people-list">
+                  {sampleFollowers.length ? sampleFollowers.map((user) => (
+                    <div className="person-row" key={userKey(user)}>
+                      <div className="person-avatar">{user.username?.slice(0, 1).toUpperCase() || "?"}</div>
+                      <div><b>@{user.username || "unknown"}</b><small>{user.fullName || "Instagram user"}</small></div>
+                      <code>{user.id || "no-id"}</code>
+                    </div>
+                  )) : <div className="empty-state tall">No follower data.</div>}
                 </div>
-              )) : <div className="empty-state tall">No complete cloud run for this target yet.</div>}
+              </article>
+              <article className="sample-card hazy-card">
+                <div className="card-topline"><div><span className="mini-label">LATEST CLOUD SAMPLE</span><h3>Following</h3></div><span>{sampleFollowing.length} shown</span></div>
+                <div className="people-list">
+                  {sampleFollowing.length ? sampleFollowing.map((user) => (
+                    <div className="person-row" key={userKey(user)}>
+                      <div className="person-avatar">{user.username?.slice(0, 1).toUpperCase() || "?"}</div>
+                      <div><b>@{user.username || "unknown"}</b><small>{user.fullName || "Instagram user"}</small></div>
+                      <code>{user.id || "no-id"}</code>
+                    </div>
+                  )) : <div className="empty-state tall">No following data.</div>}
+                </div>
+              </article>
             </div>
-          </article>
+          ) : null}
         </div>
       </section>
+
+      {professionalMode ? (
+        <section className="content-section grey-section" id="history">
+          <div className="section-wrap">
+            <div className="section-heading">
+              <span className="section-tag"><i>05</i> History</span>
+              <div>
+                <h2>One target history.<br />Across every device.</h2>
+                <p>Only finalized cloud runs appear here. Partial uploads and failed runs are excluded from comparison.</p>
+              </div>
+            </div>
+
+            <article className="history-card hazy-card">
+              <div className="card-topline">
+                <div><span className="mini-label">SUPABASE HISTORY</span><h3>Complete runs · {targetLabel(target, status?.loggedInUserId)}</h3></div>
+                <span>{cloudHistory.length} runs</span>
+              </div>
+              <div className="history-table">
+                <div className="history-row history-head"><span>Time</span><span>Followers</span><span>Following</span><span>Duration</span><span>Run</span></div>
+                {cloudHistory.length ? cloudHistory.map((run) => (
+                  <div className="history-row" key={run.id}>
+                    <span>{formatDate(run.finished_at || run.created_at)}</span>
+                    <span>{formatNumber(run.crawled_followers)}</span>
+                    <span>{formatNumber(run.crawled_following)}</span>
+                    <span>{formatDuration(run.duration_ms)}</span>
+                    <code>{run.id.slice(0, 10)}</code>
+                  </div>
+                )) : <div className="empty-state tall">No complete cloud run for this target yet.</div>}
+              </div>
+            </article>
+          </div>
+        </section>
+      ) : null}
 
       <footer className="site-footer">
         <div className="footer-inner">
           <div className="footer-brand">
             <span className="brand-mark"><span /></span>
             <strong>QuetUnfollowIG</strong>
-            <p>Supabase stores normalized relationship snapshots and SQL-computed diffs. Your Instagram cookie remains inside the extension context.</p>
+            <p>{professionalMode ? "Supabase stores normalized relationship snapshots and SQL-computed diffs." : "See the people behind every follow and unfollow change."}</p>
           </div>
-          <div className="footer-links"><a href="#control">Control</a><a href="#realtime">Realtime</a><a href="#changes">Changes</a><a href="#history">History</a></div>
+          <div className="footer-links">
+            <a href="#control">Control</a>
+            <a href="#changes">Changes</a>
+            <a href="#who-changed">Who changed</a>
+            {professionalMode ? <a href="#history">History</a> : null}
+          </div>
         </div>
         <div className="footer-bottom">
           <span>UNOFFICIAL INSTAGRAM ANALYTICS TOOL</span>
