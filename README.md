@@ -4,6 +4,34 @@ Cloud-backed Instagram Followers/Following change tracker with a Chrome/Chromium
 
 Production: https://quet-unfollow-ig.vercel.app
 
+## Hướng dẫn nhanh: Xem ai không còn follow bạn
+
+Dành cho người dùng phổ thông chỉ muốn đi thẳng tới kết quả **xem tài khoản nào không còn follow mình**.
+
+**Flow ngắn gọn:**
+
+`Đăng nhập Instagram → mở extension → copy Pairing key → mở main site → để Target trống → Connect → Run crawl lần 1 → chờ một khoảng thời gian → Run crawl lần 2 → xem Who changed → No longer follows you`
+
+### Các bước thực hiện
+
+1. **Cài hoặc cập nhật extension QuetUnfollowIG** trong Chrome. Nếu vừa cập nhật source, vào `chrome://extensions` và bấm **Reload**.
+2. **Đăng nhập Instagram** trên `instagram.com` bằng chính tài khoản bạn muốn kiểm tra ai không còn follow.
+3. **Mở popup extension** và kiểm tra Instagram session đã sẵn sàng, đồng thời Cloud Workspace đang ở trạng thái **Connected**.
+4. Trong popup extension, **copy Pairing key**.
+5. Mở main site: `https://quet-unfollow-ig.vercel.app`.
+6. Paste Pairing key vào ô **Pairing key**.
+7. **Để trống ô Instagram target** nếu mục tiêu là kiểm tra chính tài khoản đang đăng nhập.
+8. Bấm **Connect**.
+9. Khi nút **Run crawl** sáng lên, bấm **Run crawl** và chờ crawl hoàn tất.
+10. **Lần crawl đầu tiên chỉ tạo mốc dữ liệu ban đầu**, vì vậy chưa thể biết ai đã biến mất khỏi Followers.
+11. Sau một khoảng thời gian, mở lại website, Connect và **Run crawl lần thứ hai cho cùng tài khoản**.
+12. Khi lần crawl thứ hai hoàn tất, cuộn xuống **Changes** để xem số lượng thay đổi, sau đó xuống **Who changed**.
+13. Xem nhóm **No longer follows you**. Đây là danh sách những tài khoản có trong Followers ở lần crawl trước nhưng không còn xuất hiện trong lần crawl mới nhất.
+
+> **Quan trọng:** cần ít nhất **2 complete runs** của cùng một tài khoản mới có kết quả so sánh. Một tài khoản biến mất khỏi Followers thường có thể là đã unfollow bạn, nhưng dữ liệu này không tự chứng minh nguyên nhân. Block, deactivate/xóa tài khoản, thay đổi visibility hoặc bất thường phía Instagram cũng có thể làm tài khoản biến mất khỏi danh sách.
+
+Nếu chỉ cần xem ai không còn follow mình, bạn **không cần bật Professional Mode**. Chế độ mặc định đã hiển thị số lượng thay đổi và danh sách account cụ thể trong **Who changed**.
+
 ## Hướng dẫn sử dụng chi tiết
 
 Phần này dành cho người dùng thông thường muốn cài đặt và sử dụng QuetUnfollowIG mà không cần hiểu sâu về mã nguồn.
