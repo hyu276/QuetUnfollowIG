@@ -1,3 +1,6 @@
+const MAIN_SITE_URL = "https://quet-unfollow-ig.vercel.app/";
+const LAST_TARGET_KEY = "quetUnfollowIGLastTarget";
+
 const statusEl = document.getElementById("status");
 const crawlBtn = document.getElementById("crawl");
 const dashboardBtn = document.getElementById("dashboard");
@@ -8,6 +11,7 @@ const targetInput = document.getElementById("targetUsername");
 const cloudStateEl = document.getElementById("cloudState");
 const cloudConnectedEl = document.getElementById("cloudConnected");
 const cloudSetupEl = document.getElementById("cloudSetup");
+const cloudSetupHelpEl = document.getElementById("cloudSetupHelp");
 const cloudKeyEl = document.getElementById("cloudKey");
 const cloudKeyInput = document.getElementById("cloudKeyInput");
 const cloudWorkspaceNameEl = document.getElementById("cloudWorkspaceName");
@@ -16,30 +20,53 @@ const connectCloudBtn = document.getElementById("connectCloud");
 const createCloudBtn = document.getElementById("createCloud");
 const disconnectCloudBtn = document.getElementById("disconnectCloud");
 
+let crawlStartedFromPopup = false;
+
+targetInput.value = localStorage.getItem(LAST_TARGET_KEY) || "";
+targetInput.addEventListener("input", () => {
+  localStorage.setItem(LAST_TARGET_KEY, targetInput.value.trim());
+});
+
 function send(type, extra = {}) {
   return chrome.runtime.sendMessage({ type, ...extra });
 }
 
 async function copyText(value, button) {
-  if (!value) return;
+  if (!value || value === "—") return;
   try {
     await navigator.clipboard.writeText(value);
     const original = button.textContent;
     button.textContent = "Copied";
     setTimeout(() => (button.textContent = original), 1200);
-  } catch (_) {}
+  } catch (_) {
+    statusEl.textContent = "Không copy được tự động. Hãy chọn và copy thủ công.";
+  }
 }
 
 async function refreshStatus() {
   const response = await send("GET_STATUS");
   if (!response?.ok) {
     statusEl.textContent = response?.error || "Không đọc được trạng thái.";
+    crawlBtn.disabled = true;
     return;
   }
-  const id = response.result.loggedInUserId;
-  statusEl.textContent = id
-    ? `Phiên Instagram sẵn sàng · viewer ID ${id}`
-    : "Chưa nhận diện được phiên Instagram đang đăng nhập.";
+
+  const { loggedInUserId, activeCrawl } = response.result;
+  if (activeCrawl) {
+    crawlBtn.disabled = true;
+    crawlBtn.textContent = "Crawl đang chạy…";
+    const target = activeCrawl.target ? ` · ${activeCrawl.target}` : "";
+    statusEl.textContent = `Một crawl đang chạy${target}. Không thể bắt đầu crawl thứ hai cùng lúc.`;
+    return;
+  }
+
+  if (!crawlStartedFromPopup) {
+    crawlBtn.disabled = !loggedInUserId;
+    crawlBtn.textContent = "Crawl target → Supabase";
+  }
+  statusEl.textContent = loggedInUserId
+    ? `Phiên Instagram sẵn sàng · viewer ID ${loggedInUserId}`
+    : "Chưa nhận diện được phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt.";
 }
 
 async function refreshPairingKey() {
@@ -56,34 +83,44 @@ async function refreshCloud() {
     cloudStateEl.className = "state-pill bad";
     cloudConnectedEl.classList.add("hidden");
     cloudSetupEl.classList.remove("hidden");
+    cloudSetupHelpEl.textContent = response?.error || "Không kiểm tra được Cloud Workspace.";
     return;
   }
 
   const config = response.result;
-  if (!config.configured) {
-    cloudStateEl.textContent = "Not configured";
-    cloudStateEl.className = "state-pill";
+  if (!config.configured || config.error) {
+    cloudStateEl.textContent = config.code === "WORKSPACE_ALREADY_EXISTS" ? "Key required" : (config.error ? "Setup needed" : "Not configured");
+    cloudStateEl.className = `state-pill ${config.error ? "bad" : ""}`;
     cloudConnectedEl.classList.add("hidden");
     cloudSetupEl.classList.remove("hidden");
     cloudKeyEl.textContent = "—";
+
+    const workspaceExists = config.code === "WORKSPACE_ALREADY_EXISTS";
+    createCloudBtn.disabled = workspaceExists;
+    createCloudBtn.textContent = workspaceExists ? "Use existing key" : "Create new";
+    cloudSetupHelpEl.textContent = workspaceExists
+      ? "Workspace đã tồn tại. Hãy copy Cloud Workspace Key từ thiết bị đã setup và paste vào ô bên trên."
+      : (config.error || "Thiết bị đầu tiên có thể tạo workspace; thiết bị khác nên connect workspace hiện có.");
     return;
   }
 
+  createCloudBtn.disabled = false;
+  createCloudBtn.textContent = "Create new";
   cloudConnectedEl.classList.remove("hidden");
   cloudSetupEl.classList.add("hidden");
   cloudKeyEl.textContent = config.workspaceKey || "—";
   cloudWorkspaceNameEl.textContent = config.workspace
     ? `${config.workspace.name} · ${config.workspace.id}`
-    : (config.error || "Workspace key đã lưu nhưng backend chưa xác nhận.");
-  cloudStateEl.textContent = config.error ? "Degraded" : "Connected";
-  cloudStateEl.className = `state-pill ${config.error ? "bad" : "ok"}`;
+    : "Workspace key đã lưu nhưng backend chưa trả metadata.";
+  cloudStateEl.textContent = "Connected";
+  cloudStateEl.className = "state-pill ok";
 }
 
 copyKeyBtn.addEventListener("click", () => copyText(pairingKeyEl.textContent.trim(), copyKeyBtn));
 copyCloudKeyBtn.addEventListener("click", () => copyText(cloudKeyEl.textContent.trim(), copyCloudKeyBtn));
 
 rotateKeyBtn.addEventListener("click", async () => {
-  const confirmed = confirm("Tạo pairing key mới? Website đang kết nối bằng key cũ sẽ mất quyền truy cập.");
+  const confirmed = confirm("Tạo pairing key mới? Main site đang dùng key cũ sẽ mất quyền truy cập cho tới khi bạn paste key mới.");
   if (!confirmed) return;
   const response = await send("ROTATE_PAIRING_KEY");
   pairingKeyEl.textContent = response?.ok ? response.result.pairingKey : "Không tạo được key";
@@ -93,14 +130,13 @@ createCloudBtn.addEventListener("click", async () => {
   createCloudBtn.disabled = true;
   createCloudBtn.textContent = "Creating…";
   const response = await send("CREATE_CLOUD_WORKSPACE", { name: "QuetUnfollowIG Workspace" });
-  createCloudBtn.disabled = false;
-  createCloudBtn.textContent = "Create new";
   if (!response?.ok) {
     statusEl.textContent = response?.error || "Không tạo được Cloud Workspace.";
+    await refreshCloud();
     return;
   }
   await refreshCloud();
-  statusEl.textContent = "Cloud Workspace đã tạo. Hãy copy Cloud Workspace Key để dùng trên thiết bị khác.";
+  statusEl.textContent = "Cloud Workspace đã tạo. Nên backup Cloud Workspace Key để dùng trên thiết bị khác.";
 });
 
 connectCloudBtn.addEventListener("click", async () => {
@@ -120,11 +156,13 @@ connectCloudBtn.addEventListener("click", async () => {
   }
   cloudKeyInput.value = "";
   await refreshCloud();
-  statusEl.textContent = "Đã kết nối Cloud Workspace. History/diff sẽ dùng chung trên thiết bị này.";
+  statusEl.textContent = "Đã kết nối Cloud Workspace. History/diff trên thiết bị này sẽ dùng chung cloud data.";
 });
 
 disconnectCloudBtn.addEventListener("click", async () => {
-  const confirmed = confirm("Ngắt Cloud Workspace trên thiết bị này? Dữ liệu trên Supabase không bị xóa.");
+  const confirmed = confirm(
+    "Ngắt Cloud Workspace trên thiết bị này? Hãy chắc rằng bạn đã lưu Cloud Workspace Key; nếu mất key, thiết bị này không thể tự khôi phục history cloud hiện có."
+  );
   if (!confirmed) return;
   await send("DISCONNECT_CLOUD_WORKSPACE");
   await refreshCloud();
@@ -132,6 +170,8 @@ disconnectCloudBtn.addEventListener("click", async () => {
 
 crawlBtn.addEventListener("click", async () => {
   const targetUsername = targetInput.value.trim();
+  localStorage.setItem(LAST_TARGET_KEY, targetUsername);
+  crawlStartedFromPopup = true;
   crawlBtn.disabled = true;
   crawlBtn.textContent = "Crawling + syncing…";
   statusEl.textContent = targetUsername
@@ -142,10 +182,10 @@ crawlBtn.addEventListener("click", async () => {
     ? await send("CRAWL_TARGET", { targetUsername })
     : await send("CRAWL_NOW");
 
+  crawlStartedFromPopup = false;
   if (!response?.ok) {
     statusEl.textContent = response?.error || "Crawl thất bại.";
-    crawlBtn.disabled = false;
-    crawlBtn.textContent = "Crawl target → Supabase";
+    await refreshStatus();
     return;
   }
 
@@ -161,9 +201,11 @@ crawlBtn.addEventListener("click", async () => {
 });
 
 dashboardBtn.addEventListener("click", () => {
-  chrome.tabs.create({ url: chrome.runtime.getURL("dashboard.html") });
+  chrome.tabs.create({ url: MAIN_SITE_URL });
 });
 
 refreshStatus();
 refreshPairingKey();
 refreshCloud();
+const statusTimer = setInterval(() => refreshStatus().catch(() => {}), 2500);
+window.addEventListener("unload", () => clearInterval(statusTimer));
