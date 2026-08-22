@@ -21,6 +21,7 @@ const createCloudBtn = document.getElementById("createCloud");
 const disconnectCloudBtn = document.getElementById("disconnectCloud");
 
 let crawlStartedFromPopup = false;
+let statusHoldUntil = 0;
 
 targetInput.value = localStorage.getItem(LAST_TARGET_KEY) || "";
 targetInput.addEventListener("input", () => {
@@ -31,6 +32,15 @@ function send(type, extra = {}) {
   return chrome.runtime.sendMessage({ type, ...extra });
 }
 
+function holdStatus(message, milliseconds = 6500) {
+  statusEl.textContent = message;
+  statusHoldUntil = Date.now() + milliseconds;
+}
+
+function canReplaceStatus() {
+  return Date.now() >= statusHoldUntil;
+}
+
 async function copyText(value, button) {
   if (!value || value === "—") return;
   try {
@@ -39,15 +49,15 @@ async function copyText(value, button) {
     button.textContent = "Copied";
     setTimeout(() => (button.textContent = original), 1200);
   } catch (_) {
-    statusEl.textContent = "Không copy được tự động. Hãy chọn và copy thủ công.";
+    holdStatus("Không copy được tự động. Hãy chọn và copy thủ công.");
   }
 }
 
 async function refreshStatus() {
   const response = await send("GET_STATUS");
   if (!response?.ok) {
-    statusEl.textContent = response?.error || "Không đọc được trạng thái.";
     crawlBtn.disabled = true;
+    if (canReplaceStatus()) statusEl.textContent = response?.error || "Không đọc được trạng thái.";
     return;
   }
 
@@ -57,6 +67,7 @@ async function refreshStatus() {
     crawlBtn.textContent = "Crawl đang chạy…";
     const target = activeCrawl.target ? ` · ${activeCrawl.target}` : "";
     statusEl.textContent = `Một crawl đang chạy${target}. Không thể bắt đầu crawl thứ hai cùng lúc.`;
+    statusHoldUntil = 0;
     return;
   }
 
@@ -64,9 +75,12 @@ async function refreshStatus() {
     crawlBtn.disabled = !loggedInUserId;
     crawlBtn.textContent = "Crawl target → Supabase";
   }
-  statusEl.textContent = loggedInUserId
-    ? `Phiên Instagram sẵn sàng · viewer ID ${loggedInUserId}`
-    : "Chưa nhận diện được phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt.";
+
+  if (canReplaceStatus()) {
+    statusEl.textContent = loggedInUserId
+      ? `Phiên Instagram sẵn sàng · viewer ID ${loggedInUserId}`
+      : "Chưa nhận diện được phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt.";
+  }
 }
 
 async function refreshPairingKey() {
@@ -124,6 +138,7 @@ rotateKeyBtn.addEventListener("click", async () => {
   if (!confirmed) return;
   const response = await send("ROTATE_PAIRING_KEY");
   pairingKeyEl.textContent = response?.ok ? response.result.pairingKey : "Không tạo được key";
+  holdStatus(response?.ok ? "Pairing key mới đã được tạo." : (response?.error || "Không tạo được pairing key."));
 });
 
 createCloudBtn.addEventListener("click", async () => {
@@ -131,18 +146,18 @@ createCloudBtn.addEventListener("click", async () => {
   createCloudBtn.textContent = "Creating…";
   const response = await send("CREATE_CLOUD_WORKSPACE", { name: "QuetUnfollowIG Workspace" });
   if (!response?.ok) {
-    statusEl.textContent = response?.error || "Không tạo được Cloud Workspace.";
+    holdStatus(response?.error || "Không tạo được Cloud Workspace.");
     await refreshCloud();
     return;
   }
   await refreshCloud();
-  statusEl.textContent = "Cloud Workspace đã tạo. Nên backup Cloud Workspace Key để dùng trên thiết bị khác.";
+  holdStatus("Cloud Workspace đã tạo. Nên backup Cloud Workspace Key để dùng trên thiết bị khác.", 9000);
 });
 
 connectCloudBtn.addEventListener("click", async () => {
   const workspaceKey = cloudKeyInput.value.trim();
   if (!workspaceKey) {
-    statusEl.textContent = "Paste Cloud Workspace Key trước khi connect.";
+    holdStatus("Paste Cloud Workspace Key trước khi connect.");
     return;
   }
   connectCloudBtn.disabled = true;
@@ -151,12 +166,12 @@ connectCloudBtn.addEventListener("click", async () => {
   connectCloudBtn.disabled = false;
   connectCloudBtn.textContent = "Connect existing";
   if (!response?.ok) {
-    statusEl.textContent = response?.error || "Cloud Workspace Key không hợp lệ.";
+    holdStatus(response?.error || "Cloud Workspace Key không hợp lệ.");
     return;
   }
   cloudKeyInput.value = "";
   await refreshCloud();
-  statusEl.textContent = "Đã kết nối Cloud Workspace. History/diff trên thiết bị này sẽ dùng chung cloud data.";
+  holdStatus("Đã kết nối Cloud Workspace. History/diff trên thiết bị này sẽ dùng chung cloud data.");
 });
 
 disconnectCloudBtn.addEventListener("click", async () => {
@@ -166,6 +181,7 @@ disconnectCloudBtn.addEventListener("click", async () => {
   if (!confirmed) return;
   await send("DISCONNECT_CLOUD_WORKSPACE");
   await refreshCloud();
+  holdStatus("Đã ngắt Cloud Workspace trên thiết bị này.");
 });
 
 crawlBtn.addEventListener("click", async () => {
@@ -174,6 +190,7 @@ crawlBtn.addEventListener("click", async () => {
   crawlStartedFromPopup = true;
   crawlBtn.disabled = true;
   crawlBtn.textContent = "Crawling + syncing…";
+  statusHoldUntil = 0;
   statusEl.textContent = targetUsername
     ? `Đang resolve, crawl và commit ${targetUsername.startsWith("@") ? targetUsername : `@${targetUsername}`} lên Supabase…`
     : "Đang crawl và commit tài khoản Instagram hiện tại lên Supabase…";
@@ -184,7 +201,7 @@ crawlBtn.addEventListener("click", async () => {
 
   crawlStartedFromPopup = false;
   if (!response?.ok) {
-    statusEl.textContent = response?.error || "Crawl thất bại.";
+    holdStatus(response?.error || "Crawl thất bại.", 10000);
     await refreshStatus();
     return;
   }
@@ -195,7 +212,7 @@ crawlBtn.addEventListener("click", async () => {
   const suffix = diff?.previousRunId
     ? ` · lost ${diff.lostFollowers || 0} · new ${diff.newFollowers || 0}`
     : " · cloud baseline created";
-  statusEl.textContent = `Cloud committed ${label} · ${snapshot.counts.followers} followers · ${snapshot.counts.following} following${suffix}`;
+  holdStatus(`Cloud committed ${label} · ${snapshot.counts.followers} followers · ${snapshot.counts.following} following${suffix}`, 10000);
   crawlBtn.disabled = false;
   crawlBtn.textContent = "Crawl lại target → Supabase";
 });
