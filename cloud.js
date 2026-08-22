@@ -30,7 +30,7 @@ async function getCloudClientId() {
 async function cloudCall(action, payload = {}, options = {}) {
   const key = String(options.workspaceKey || await getCloudWorkspaceKey()).trim();
   if (action !== "create_workspace" && !key) {
-    throw new Error("Cloud Workspace chưa được cấu hình. Mở extension popup để tạo hoặc nhập Cloud Workspace Key.");
+    throw new Error("Cloud Workspace chưa được cấu hình.");
   }
 
   const headers = { "Content-Type": "application/json" };
@@ -89,15 +89,40 @@ async function cloudDisconnectWorkspace() {
 }
 
 async function cloudGetConfig() {
-  const key = await getCloudWorkspaceKey();
-  if (!key) return { configured: false, workspace: null, maskedKey: "" };
+  let key = await getCloudWorkspaceKey();
+
+  // Zero-config first device: provision the single personal workspace automatically.
+  // The key stays inside chrome.storage.local and is only exposed by the extension popup
+  // when the user intentionally wants to copy it to another device.
+  if (!key) {
+    try {
+      const created = await cloudCreateWorkspace("QuetUnfollowIG Workspace");
+      key = created.workspaceKey;
+      return {
+        configured: true,
+        workspace: created.workspace,
+        workspaceKey: key,
+        maskedKey: `${key.slice(0, 8)}…${key.slice(-6)}`,
+        autoProvisioned: true
+      };
+    } catch (error) {
+      return {
+        configured: false,
+        workspace: null,
+        maskedKey: "",
+        error: `Không thể tự khởi tạo Cloud Workspace. Nếu workspace đã được tạo trên thiết bị khác, hãy mở extension popup và nhập Cloud Workspace Key của workspace đó. ${error?.message || String(error)}`
+      };
+    }
+  }
+
   try {
     const result = await cloudCall("ping", {}, { workspaceKey: key, attempts: 1 });
     return {
       configured: true,
       workspace: result.workspace,
       workspaceKey: key,
-      maskedKey: `${key.slice(0, 8)}…${key.slice(-6)}`
+      maskedKey: `${key.slice(0, 8)}…${key.slice(-6)}`,
+      autoProvisioned: false
     };
   } catch (error) {
     return {
@@ -111,9 +136,14 @@ async function cloudGetConfig() {
 }
 
 async function cloudRequireWorkspace() {
-  const key = await getCloudWorkspaceKey();
-  if (!key) throw new Error("Cloud Workspace chưa được cấu hình. Hãy tạo workspace hoặc nhập key từ thiết bị khác trước khi crawl.");
-  return key;
+  let key = await getCloudWorkspaceKey();
+  if (key) return key;
+
+  const config = await cloudGetConfig();
+  key = await getCloudWorkspaceKey();
+  if (config.configured && !config.error && key) return key;
+
+  throw new Error(config.error || "Cloud Workspace chưa được cấu hình. Hãy mở extension popup để kết nối workspace hiện có.");
 }
 
 async function cloudListTargets() {
