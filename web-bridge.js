@@ -1,8 +1,21 @@
 const BRIDGE_SOURCE = "quet-unfollow-ig-web";
 const port = chrome.runtime.connect({ name: "quet-unfollow-web-bridge" });
+const pendingActions = new Map();
 
 function postToPage(type, payload = {}) {
   window.postMessage({ source: BRIDGE_SOURCE, type, ...payload }, window.location.origin);
+}
+
+function sanitizeWebResult(message) {
+  if (!message || message.type !== "WEB_RESPONSE" || !message.result) return message;
+  const action = pendingActions.get(message.requestId);
+  pendingActions.delete(message.requestId);
+
+  if (action !== "GET_STATUS" && action !== "GET_CLOUD_CONFIG") return message;
+  const result = structuredClone(message.result);
+  if (result?.cloudConfig?.workspaceKey) delete result.cloudConfig.workspaceKey;
+  if (result?.workspaceKey) delete result.workspaceKey;
+  return { ...message, result };
 }
 
 port.onMessage.addListener((message) => {
@@ -10,10 +23,13 @@ port.onMessage.addListener((message) => {
     postToPage("CRAWL_PROGRESS", { payload: message.payload });
     return;
   }
-  if (message?.type === "WEB_RESPONSE") postToPage("WEB_RESPONSE", message);
+  if (message?.type === "WEB_RESPONSE") {
+    postToPage("WEB_RESPONSE", sanitizeWebResult(message));
+  }
 });
 
 port.onDisconnect.addListener(() => {
+  pendingActions.clear();
   postToPage("BRIDGE_DISCONNECTED", {
     error: chrome.runtime.lastError?.message || "Extension bridge disconnected."
   });
@@ -33,6 +49,7 @@ window.addEventListener("message", (event) => {
   }
 
   if (message.type !== "WEB_REQUEST") return;
+  pendingActions.set(message.requestId, message.action);
   port.postMessage({
     type: "WEB_REQUEST",
     requestId: message.requestId,
