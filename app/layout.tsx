@@ -1,9 +1,10 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./features.css";
 
 export const metadata: Metadata = {
-  title: "QuetUnfollowIG · Live Crawl Test",
-  description: "Realtime validation console for the QuetUnfollowIG browser crawler"
+  title: "QuetUnfollowIG · Cloud Relationship Tracker",
+  description: "Cross-device Instagram follower and following change tracker backed by Supabase"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
