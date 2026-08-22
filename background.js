@@ -1,6 +1,7 @@
 const STORAGE_KEY = "quetUnfollowIGState";
 const PAIRING_KEY_STORAGE = "quetUnfollowIGPairingKey";
 const APP_ID = "936619743392459";
+const ASBD_ID = "198387";
 const MAX_HISTORY = 30;
 const PAGE_SIZE = 100;
 const bridgePorts = new Set();
@@ -9,12 +10,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const jitter = () => 900 + Math.floor(Math.random() * 900);
 
 function emptyState() {
-  return { schemaVersion: 1, currentAccountId: null, accounts: {} };
+  return { schemaVersion: 2, currentAccountId: null, accounts: {}, targets: {} };
 }
 
 async function getState() {
   const stored = await chrome.storage.local.get(STORAGE_KEY);
-  return stored[STORAGE_KEY] || emptyState();
+  const state = stored[STORAGE_KEY] || emptyState();
+  if (!state.accounts) state.accounts = {};
+  if (!state.targets) state.targets = {};
+  state.schemaVersion = 2;
+  return state;
 }
 
 async function setState(state) {
@@ -46,24 +51,156 @@ async function assertPairingKey(key) {
 }
 
 async function getLoggedInUserId() {
-  const cookie = await chrome.cookies.get({
-    url: "https://www.instagram.com/",
-    name: "ds_user_id"
-  });
+  const cookie = await chrome.cookies.get({ url: "https://www.instagram.com/", name: "ds_user_id" });
   if (!cookie?.value) {
     throw new Error("Không tìm thấy phiên Instagram. Hãy đăng nhập instagram.com trong cùng trình duyệt rồi thử lại.");
   }
   return String(cookie.value);
 }
 
+function normalizeUsername(input) {
+  let value = String(input || "").trim();
+  if (!value) return "";
+  value = value.replace(/^https?:\/\/(www\.)?instagram\.com\//i, "");
+  value = value.split(/[/?#]/)[0];
+  return value.replace(/^@/, "").trim().toLowerCase();
+}
+
 function normalizeUser(user) {
   return {
-    id: String(user.pk ?? user.id ?? user.pk_id ?? ""),
-    username: user.username || "",
-    fullName: user.full_name || "",
-    isPrivate: Boolean(user.is_private),
-    isVerified: Boolean(user.is_verified)
+    id: String(user?.pk ?? user?.id ?? user?.pk_id ?? ""),
+    username: user?.username || "",
+    fullName: user?.full_name || "",
+    isPrivate: Boolean(user?.is_private),
+    isVerified: Boolean(user?.is_verified)
   };
+}
+
+function numberOrNull(...values) {
+  for (const value of values) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0) return number;
+  }
+  return null;
+}
+
+function normalizeTargetProfile(user, requestedUsername) {
+  const basic = normalizeUser(user || {});
+  const friendship = user?.friendship_status || {};
+  return {
+    id: basic.id,
+    username: basic.username || requestedUsername,
+    fullName: basic.fullName,
+    isPrivate: basic.isPrivate,
+    isVerified: basic.isVerified,
+    viewerFollows: Boolean(user?.followed_by_viewer ?? friendship.following ?? false),
+    followsViewer: Boolean(user?.follows_viewer ?? friendship.followed_by ?? false),
+    expectedFollowers: numberOrNull(user?.edge_followed_by?.count, user?.follower_count, user?.followers_count),
+    expectedFollowing: numberOrNull(user?.edge_follow?.count, user?.following_count, user?.follow_count),
+    resolver: "unknown"
+  };
+}
+
+function findUserCandidate(payload, requestedUsername) {
+  const normalized = normalizeUsername(requestedUsername);
+  const obvious = [
+    payload?.data?.user,
+    payload?.user,
+    payload?.items?.[0]?.user,
+    payload?.items?.[0]?.owner,
+    payload?.stream_rows?.[0]?.user
+  ].filter(Boolean);
+
+  for (const candidate of obvious) {
+    if (candidate?.id || candidate?.pk || candidate?.pk_id) return candidate;
+  }
+
+  const queue = [{ value: payload, depth: 0 }];
+  const seen = new Set();
+  while (queue.length) {
+    const { value, depth } = queue.shift();
+    if (!value || typeof value !== "object" || seen.has(value) || depth > 5) continue;
+    seen.add(value);
+    if ((value.id || value.pk || value.pk_id) && normalizeUsername(value.username) === normalized) return value;
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") queue.push({ value: child, depth: depth + 1 });
+    }
+  }
+  return null;
+}
+
+function requestHeaders() {
+  return {
+    "X-IG-App-ID": APP_ID,
+    "X-ASBD-ID": ASBD_ID,
+    "Accept": "application/json"
+  };
+}
+
+async function fetchInstagramJson(url) {
+  const response = await fetch(url, {
+    method: "GET",
+    credentials: "include",
+    cache: "no-store",
+    headers: requestHeaders()
+  });
+  let data = null;
+  try { data = await response.json(); } catch (_) {}
+  return { response, data };
+}
+
+async function resolveTargetProfile(input, viewerId) {
+  const username = normalizeUsername(input);
+  if (!username || username === "me" || username === "self") {
+    return {
+      id: String(viewerId), username: "", fullName: "", isPrivate: false, isVerified: false,
+      viewerFollows: true, followsViewer: true, expectedFollowers: null, expectedFollowing: null,
+      resolver: "session-self", isSelf: true
+    };
+  }
+
+  const attempts = [
+    {
+      name: "web_profile_info",
+      url: `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}`
+    },
+    {
+      name: "usernameinfo_stream",
+      url: `https://www.instagram.com/api/v1/users/${encodeURIComponent(username)}/usernameinfo_stream/`
+    },
+    {
+      name: "feed_by_username",
+      url: `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/?count=1`
+    }
+  ];
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const { response, data } = await fetchInstagramJson(attempt.url);
+      if (!response.ok) {
+        errors.push(`${attempt.name}: HTTP ${response.status}`);
+        continue;
+      }
+      const candidate = findUserCandidate(data, username);
+      if (!candidate) {
+        errors.push(`${attempt.name}: no user payload`);
+        continue;
+      }
+      const profile = normalizeTargetProfile(candidate, username);
+      if (!profile.id) {
+        errors.push(`${attempt.name}: no numeric id`);
+        continue;
+      }
+      profile.resolver = attempt.name;
+      profile.isSelf = profile.id === String(viewerId);
+      return profile;
+    } catch (error) {
+      errors.push(`${attempt.name}: ${error?.message || String(error)}`);
+    }
+  }
+
+  throw new Error(`Không resolve được @${username}. Profile có thể không tồn tại, Instagram đang gate endpoint này, hoặc session hiện tại không nhìn thấy profile. ${errors.join(" · ")}`);
 }
 
 function dedupeUsers(users) {
@@ -79,32 +216,37 @@ function dedupeUsers(users) {
 
 function broadcastProgress(payload) {
   for (const port of bridgePorts) {
-    try {
-      port.postMessage({ type: "CRAWL_PROGRESS", payload });
-    } catch (_) {
-      bridgePorts.delete(port);
-    }
+    try { port.postMessage({ type: "CRAWL_PROGRESS", payload }); }
+    catch (_) { bridgePorts.delete(port); }
   }
 }
 
-async function emitProgress(kind, loaded, page, startedAt, extra = {}) {
+async function emitProgress(kind, loaded, page, startedAt, target, extra = {}) {
   const payload = {
-    kind,
-    loaded,
-    page,
+    kind, loaded, page,
+    target: { id: target.id, username: target.username, isPrivate: target.isPrivate },
     elapsedMs: Date.now() - startedAt,
     at: new Date().toISOString(),
     ...extra
   };
   broadcastProgress(payload);
-  try {
-    await chrome.runtime.sendMessage({ type: "CRAWL_PROGRESS", payload });
-  } catch (_) {
-    // Dashboard/popup may be closed. Crawling should continue.
-  }
+  try { await chrome.runtime.sendMessage({ type: "CRAWL_PROGRESS", payload }); } catch (_) {}
 }
 
-async function fetchRelationshipList(userId, kind, crawlStartedAt) {
+function accessError(target, kind, status, detail = "") {
+  const label = target.username ? `@${target.username}` : `ID ${target.id}`;
+  if (!target.isSelf && (status === 400 || status === 403 || status === 404)) {
+    const privateHint = target.isPrivate
+      ? " Đây là private account; session Instagram hiện tại phải thực sự có quyền mở danh sách này trên Instagram."
+      : " Danh sách có thể bị Instagram giới hạn cho session hiện tại.";
+    return new Error(`Không thể đọc ${kind} của ${label} (HTTP ${status}).${privateHint}${detail ? ` ${detail}` : ""}`);
+  }
+  if (status === 401 || status === 403) return new Error("Instagram từ chối phiên đăng nhập. Hãy mở instagram.com, tải lại trang và thử lại.");
+  if (status === 429) return new Error("Instagram đang rate-limit session này. Không nên crawl tiếp ngay lúc này.");
+  return new Error(`Instagram API trả về HTTP ${status} khi đọc ${kind} của ${label}.${detail ? ` ${detail}` : ""}`);
+}
+
+async function fetchRelationshipList(target, kind, crawlStartedAt) {
   const all = [];
   let nextMaxId = "";
   let page = 0;
@@ -112,124 +254,126 @@ async function fetchRelationshipList(userId, kind, crawlStartedAt) {
   do {
     page += 1;
     const pageStartedAt = performance.now();
-    const params = new URLSearchParams({
-      count: String(PAGE_SIZE),
-      search_surface: "follow_list_page"
-    });
+    const params = new URLSearchParams({ count: String(PAGE_SIZE), search_surface: "follow_list_page" });
     if (nextMaxId) params.set("max_id", nextMaxId);
 
-    const response = await fetch(
-      `https://www.instagram.com/api/v1/friendships/${encodeURIComponent(userId)}/${kind}/?${params.toString()}`,
-      {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          "X-IG-App-ID": APP_ID,
-          "Accept": "application/json"
-        }
-      }
-    );
+    const url = `https://www.instagram.com/api/v1/friendships/${encodeURIComponent(target.id)}/${kind}/?${params.toString()}`;
+    const { response, data } = await fetchInstagramJson(url);
 
     if (!response.ok) {
-      if (response.status === 401 || response.status === 403) {
-        throw new Error("Instagram từ chối phiên đăng nhập. Hãy mở instagram.com, tải lại trang và thử lại.");
-      }
-      if (response.status === 429) {
-        throw new Error("Instagram đang rate-limit tài khoản này. Không nên crawl tiếp ngay lúc này.");
-      }
-      throw new Error(`Instagram API trả về HTTP ${response.status}.`);
+      const detail = data?.message ? String(data.message).slice(0, 180) : "";
+      throw accessError(target, kind, response.status, detail);
     }
-
-    const data = await response.json();
     if (data?.status && data.status !== "ok") {
-      throw new Error(`Instagram API trả về trạng thái: ${data.status}`);
+      throw new Error(`Instagram trả về trạng thái ${data.status} khi đọc ${kind} của @${target.username || target.id}.`);
     }
 
     const users = Array.isArray(data?.users) ? data.users : [];
     all.push(...users);
     nextMaxId = data?.next_max_id ? String(data.next_max_id) : "";
 
-    await emitProgress(kind, all.length, page, crawlStartedAt, {
+    await emitProgress(kind, all.length, page, crawlStartedAt, target, {
       pageLatencyMs: Math.round(performance.now() - pageStartedAt),
       hasNextPage: Boolean(nextMaxId)
     });
-
     if (nextMaxId) await sleep(jitter());
   } while (nextMaxId);
 
   return dedupeUsers(all);
 }
 
-async function crawlNow() {
+function trackerKey(viewerId, targetId) {
+  return `${viewerId}:${targetId}`;
+}
+
+function makeWarnings(target, followers, following) {
+  const warnings = [];
+  if (target.expectedFollowers != null && followers.length !== target.expectedFollowers) {
+    warnings.push(`Followers crawl=${followers.length}, profile count=${target.expectedFollowers}.`);
+  }
+  if (target.expectedFollowing != null && following.length !== target.expectedFollowing) {
+    warnings.push(`Following crawl=${following.length}, profile count=${target.expectedFollowing}.`);
+  }
+  if (target.isPrivate && !target.isSelf && !target.viewerFollows) {
+    warnings.push("Target là private account và resolver không xác nhận viewer đang follow target; khả năng truy cập phụ thuộc session thực tế.");
+  }
+  return warnings;
+}
+
+async function crawlNow(options = {}) {
   const crawlStartedAt = Date.now();
-  const userId = await getLoggedInUserId();
-  await emitProgress("followers", 0, 0, crawlStartedAt, { hasNextPage: true });
-  const followers = await fetchRelationshipList(userId, "followers", crawlStartedAt);
+  const viewerId = await getLoggedInUserId();
+  const target = await resolveTargetProfile(options?.targetUsername, viewerId);
+
+  await emitProgress("followers", 0, 0, crawlStartedAt, target, { hasNextPage: true });
+  const followers = await fetchRelationshipList(target, "followers", crawlStartedAt);
   await sleep(jitter());
-  await emitProgress("following", 0, 0, crawlStartedAt, { hasNextPage: true });
-  const following = await fetchRelationshipList(userId, "following", crawlStartedAt);
+  await emitProgress("following", 0, 0, crawlStartedAt, target, { hasNextPage: true });
+  const following = await fetchRelationshipList(target, "following", crawlStartedAt);
 
   const snapshot = {
     id: crypto.randomUUID(),
-    accountId: userId,
+    viewerAccountId: viewerId,
+    accountId: target.id,
+    targetId: target.id,
+    targetUsername: target.username,
+    targetFullName: target.fullName,
+    targetIsPrivate: target.isPrivate,
+    targetViewerFollows: target.viewerFollows,
+    resolver: target.resolver,
+    expectedCounts: { followers: target.expectedFollowers, following: target.expectedFollowing },
     crawledAt: new Date().toISOString(),
     durationMs: Date.now() - crawlStartedAt,
     followers,
     following,
-    counts: { followers: followers.length, following: following.length }
+    counts: { followers: followers.length, following: following.length },
+    warnings: makeWarnings(target, followers, following)
   };
 
   const state = await getState();
-  state.currentAccountId = userId;
-  const account = state.accounts[userId] || {
-    accountId: userId,
+  state.currentAccountId = viewerId;
+  const key = trackerKey(viewerId, target.id);
+  const tracker = state.targets[key] || {
+    viewerAccountId: viewerId,
+    targetId: target.id,
+    targetUsername: target.username,
+    targetFullName: target.fullName,
+    targetIsPrivate: target.isPrivate,
     baseline: null,
     snapshots: []
   };
+  tracker.targetUsername = target.username || tracker.targetUsername;
+  tracker.targetFullName = target.fullName || tracker.targetFullName;
+  tracker.targetIsPrivate = target.isPrivate;
+  if (!tracker.baseline) tracker.baseline = snapshot;
+  tracker.snapshots.push(snapshot);
+  if (tracker.snapshots.length > MAX_HISTORY) tracker.snapshots = tracker.snapshots.slice(-MAX_HISTORY);
+  state.targets[key] = tracker;
 
-  if (!account.baseline) account.baseline = snapshot;
-  account.snapshots.push(snapshot);
-  if (account.snapshots.length > MAX_HISTORY) {
-    account.snapshots = account.snapshots.slice(-MAX_HISTORY);
+  // Keep the original self-account dashboard backwards compatible.
+  if (target.isSelf) {
+    const account = state.accounts[viewerId] || { accountId: viewerId, baseline: null, snapshots: [] };
+    if (!account.baseline) account.baseline = snapshot;
+    account.snapshots.push(snapshot);
+    if (account.snapshots.length > MAX_HISTORY) account.snapshots = account.snapshots.slice(-MAX_HISTORY);
+    state.accounts[viewerId] = account;
   }
-  state.accounts[userId] = account;
-  await setState(state);
 
+  await setState(state);
   return {
-    userId,
+    viewerId,
+    target,
     snapshot,
-    isFirstSnapshot: account.snapshots.length === 1,
-    baselineId: account.baseline.id
+    isFirstSnapshot: tracker.snapshots.length === 1,
+    baselineId: tracker.baseline.id,
+    trackerKey: key
   };
 }
 
-async function status() {
-  let loggedInUserId = null;
-  try {
-    loggedInUserId = await getLoggedInUserId();
-  } catch (_) {
-    // Keep status readable even when logged out.
-  }
-  const state = await getState();
-  return { loggedInUserId, state };
-}
-
-async function statusForWeb() {
-  let loggedInUserId = null;
-  try {
-    loggedInUserId = await getLoggedInUserId();
-  } catch (_) {
-    // Keep the website useful even when Instagram is logged out.
-  }
-
-  if (!loggedInUserId) return { loggedInUserId: null, account: null };
-  const state = await getState();
-  const account = state.accounts[loggedInUserId];
-  if (!account) return { loggedInUserId, account: null };
-
-  const latest = account.snapshots?.at(-1) || null;
-  const history = (account.snapshots || []).map((snapshot) => ({
+function summarizeTracker(tracker) {
+  if (!tracker) return null;
+  const latest = tracker.snapshots?.at(-1) || null;
+  const history = (tracker.snapshots || []).map((snapshot) => ({
     id: snapshot.id,
     crawledAt: snapshot.crawledAt,
     durationMs: snapshot.durationMs,
@@ -238,34 +382,69 @@ async function statusForWeb() {
       following: snapshot.following?.length || 0
     }
   }));
-
   return {
-    loggedInUserId,
-    account: {
-      accountId: account.accountId,
-      baseline: account.baseline,
-      latest,
-      history,
-      snapshotCount: history.length
-    }
+    viewerAccountId: tracker.viewerAccountId,
+    targetId: tracker.targetId,
+    targetUsername: tracker.targetUsername,
+    targetFullName: tracker.targetFullName,
+    targetIsPrivate: tracker.targetIsPrivate,
+    baseline: tracker.baseline,
+    latest,
+    history,
+    snapshotCount: history.length
   };
 }
 
-async function resetBaseline() {
-  const userId = await getLoggedInUserId();
+async function status() {
+  let loggedInUserId = null;
+  try { loggedInUserId = await getLoggedInUserId(); } catch (_) {}
   const state = await getState();
-  const account = state.accounts[userId];
-  const latest = account?.snapshots?.at(-1);
-  if (!latest) throw new Error("Chưa có snapshot nào để đặt làm baseline.");
-  account.baseline = latest;
+  return { loggedInUserId, state };
+}
+
+async function statusForWeb(options = {}) {
+  let viewerId = null;
+  try { viewerId = await getLoggedInUserId(); } catch (_) {}
+  if (!viewerId) return { loggedInUserId: null, target: null, tracker: null };
+
+  const rawTarget = normalizeUsername(options?.targetUsername);
+  if (!rawTarget) {
+    const state = await getState();
+    const selfTracker = state.targets[trackerKey(viewerId, viewerId)] || null;
+    return {
+      loggedInUserId: viewerId,
+      target: { id: viewerId, username: "", isPrivate: false, isSelf: true, resolver: "session-self" },
+      tracker: summarizeTracker(selfTracker)
+    };
+  }
+
+  const target = await resolveTargetProfile(rawTarget, viewerId);
+  const state = await getState();
+  const tracker = state.targets[trackerKey(viewerId, target.id)] || null;
+  return { loggedInUserId: viewerId, target, tracker: summarizeTracker(tracker) };
+}
+
+async function resetBaseline(options = {}) {
+  const viewerId = await getLoggedInUserId();
+  const target = await resolveTargetProfile(options?.targetUsername, viewerId);
+  const state = await getState();
+  const key = trackerKey(viewerId, target.id);
+  const tracker = state.targets[key];
+  const latest = tracker?.snapshots?.at(-1);
+  if (!latest) throw new Error("Chưa có snapshot nào của target này để đặt làm baseline.");
+  tracker.baseline = latest;
+  state.targets[key] = tracker;
+
+  if (target.isSelf && state.accounts[viewerId]) state.accounts[viewerId].baseline = latest;
   await setState(state);
-  return { baselineId: latest.id, crawledAt: latest.crawledAt };
+  return { target, baselineId: latest.id, crawledAt: latest.crawledAt };
 }
 
 async function handleWebRequest(message) {
   await assertPairingKey(message?.pairingKey);
-  if (message?.action === "GET_STATUS") return statusForWeb();
-  if (message?.action === "CRAWL_NOW") return crawlNow();
+  if (message?.action === "GET_STATUS") return statusForWeb(message?.payload || {});
+  if (message?.action === "CRAWL_NOW") return crawlNow(message?.payload || {});
+  if (message?.action === "RESET_BASELINE") return resetBaseline(message?.payload || {});
   throw new Error("Web action không được hỗ trợ.");
 }
 
@@ -286,21 +465,18 @@ chrome.runtime.onConnect.addListener((port) => {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message?.type) return false;
-
   const handlers = {
     GET_STATUS: status,
-    CRAWL_NOW: crawlNow,
-    RESET_BASELINE: resetBaseline,
+    CRAWL_NOW: () => crawlNow(message?.payload || {}),
+    CRAWL_TARGET: () => crawlNow({ targetUsername: message?.targetUsername }),
+    RESET_BASELINE: () => resetBaseline(message?.payload || {}),
     GET_PAIRING_KEY: async () => ({ pairingKey: await getPairingKey() }),
     ROTATE_PAIRING_KEY: async () => ({ pairingKey: await rotatePairingKey() })
   };
-
   const handler = handlers[message.type];
   if (!handler) return false;
-
   handler()
     .then((result) => sendResponse({ ok: true, result }))
     .catch((error) => sendResponse({ ok: false, error: error?.message || String(error) }));
-
   return true;
 });
