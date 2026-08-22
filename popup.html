@@ -8,8 +8,31 @@
 </head>
 <body>
   <main class="popup">
-    <div class="brand">QuetUnfollowIG</div>
+    <div class="brand">QuetUnfollowIG <span class="version">Cloud</span></div>
     <p id="status" class="status">Đang kiểm tra phiên Instagram…</p>
+
+    <div class="cloud-card">
+      <div class="card-title-row">
+        <span class="label">Cloud Workspace · Supabase</span>
+        <span id="cloudState" class="state-pill">Checking</span>
+      </div>
+      <div id="cloudConnected" class="hidden">
+        <div class="pairing-row">
+          <code id="cloudKey">—</code>
+          <button id="copyCloudKey" class="icon-button" title="Copy Cloud Workspace Key">Copy</button>
+        </div>
+        <p id="cloudWorkspaceName" class="target-help">—</p>
+        <button id="disconnectCloud" class="text-button danger-text">Disconnect workspace trên thiết bị này</button>
+      </div>
+      <div id="cloudSetup">
+        <input id="cloudKeyInput" class="target-input" placeholder="Paste Cloud Workspace Key từ thiết bị khác" autocomplete="off" spellcheck="false" />
+        <div class="button-grid">
+          <button id="connectCloud" class="mini-button">Connect existing</button>
+          <button id="createCloud" class="mini-button accent">Create new</button>
+        </div>
+        <p class="target-help">Cùng một Cloud Workspace Key = cùng targets, crawl history và unfollow diff trên mọi thiết bị.</p>
+      </div>
+    </div>
 
     <div class="target-card">
       <span class="label">Target account</span>
@@ -26,9 +49,9 @@
       <button id="rotateKey" class="text-button">Tạo pairing key mới</button>
     </div>
 
-    <button id="crawl" class="primary">Crawl target</button>
+    <button id="crawl" class="primary">Crawl target → Supabase</button>
     <button id="dashboard" class="secondary">Mở Dashboard</button>
-    <p class="hint">Không chia sẻ pairing key. Snapshot của mỗi target được tách riêng theo tài khoản Instagram đang đăng nhập.</p>
+    <p class="hint">Crawl chỉ được coi là thành công sau khi Supabase finalize đủ Followers + Following. Cloud Workspace Key là bí mật đồng bộ; không chia sẻ công khai.</p>
   </main>
   <script src="popup.js"></script>
 </body>
