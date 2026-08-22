@@ -8,7 +8,7 @@
 </head>
 <body>
   <main class="popup">
-    <div class="brand">QuetUnfollowIG <span class="version">Cloud</span></div>
+    <div class="brand">QuetUnfollowIG <span class="version">v1.4 Cloud</span></div>
     <p id="status" class="status">Đang kiểm tra phiên Instagram…</p>
 
     <div class="cloud-card">
@@ -30,7 +30,7 @@
           <button id="connectCloud" class="mini-button">Connect existing</button>
           <button id="createCloud" class="mini-button accent">Create new</button>
         </div>
-        <p class="target-help">Cùng một Cloud Workspace Key = cùng targets, crawl history và unfollow diff trên mọi thiết bị.</p>
+        <p id="cloudSetupHelp" class="target-help">Thiết bị đầu tiên sẽ tự tạo workspace. Thiết bị khác nên dùng cùng Cloud Workspace Key để giữ chung history và unfollow diff.</p>
       </div>
     </div>
 
@@ -41,7 +41,7 @@
     </div>
 
     <div class="pairing-card">
-      <span class="label">Live website pairing key</span>
+      <span class="label">Main site pairing key</span>
       <div class="pairing-row">
         <code id="pairingKey">Đang tạo…</code>
         <button id="copyKey" class="icon-button" title="Copy pairing key">Copy</button>
@@ -50,8 +50,8 @@
     </div>
 
     <button id="crawl" class="primary">Crawl target → Supabase</button>
-    <button id="dashboard" class="secondary">Mở Dashboard</button>
-    <p class="hint">Crawl chỉ được coi là thành công sau khi Supabase finalize đủ Followers + Following. Cloud Workspace Key là bí mật đồng bộ; không chia sẻ công khai.</p>
+    <button id="dashboard" class="secondary">Mở Main Site</button>
+    <p class="hint">Một run chỉ được dùng để suy luận thay đổi sau khi Supabase xác nhận upload đầy đủ và crawl vượt qua completeness check. Cloud Workspace Key là bí mật đồng bộ; không chia sẻ công khai.</p>
   </main>
   <script src="popup.js"></script>
 </body>
