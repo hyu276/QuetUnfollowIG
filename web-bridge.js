@@ -1,4 +1,5 @@
 const BRIDGE_SOURCE = "quet-unfollow-ig-web";
+const ALLOWED_ACTIONS = new Set(["GET_STATUS", "CRAWL_NOW"]);
 const port = chrome.runtime.connect({ name: "quet-unfollow-web-bridge" });
 const pendingActions = new Map();
 
@@ -8,14 +9,19 @@ function postToPage(type, payload = {}) {
 
 function sanitizeWebResult(message) {
   if (!message || message.type !== "WEB_RESPONSE" || !message.result) return message;
-  const action = pendingActions.get(message.requestId);
   pendingActions.delete(message.requestId);
-
-  if (action !== "GET_STATUS" && action !== "GET_CLOUD_CONFIG") return message;
   const result = structuredClone(message.result);
   if (result?.cloudConfig?.workspaceKey) delete result.cloudConfig.workspaceKey;
   if (result?.workspaceKey) delete result.workspaceKey;
   return { ...message, result };
+}
+
+function rejectRequest(requestId, error) {
+  postToPage("WEB_RESPONSE", {
+    requestId,
+    ok: false,
+    error
+  });
 }
 
 port.onMessage.addListener((message) => {
@@ -49,10 +55,24 @@ window.addEventListener("message", (event) => {
   }
 
   if (message.type !== "WEB_REQUEST") return;
-  pendingActions.set(message.requestId, message.action);
+  const requestId = typeof message.requestId === "string" ? message.requestId : "";
+  if (!requestId) {
+    rejectRequest("", "Bridge requestId không hợp lệ.");
+    return;
+  }
+  if (!ALLOWED_ACTIONS.has(message.action)) {
+    rejectRequest(requestId, "Web action không được phép qua bridge.");
+    return;
+  }
+  if (!/^[a-f0-9]{36}$/i.test(String(message.pairingKey || ""))) {
+    rejectRequest(requestId, "Pairing key không đúng định dạng.");
+    return;
+  }
+
+  pendingActions.set(requestId, message.action);
   port.postMessage({
     type: "WEB_REQUEST",
-    requestId: message.requestId,
+    requestId,
     pairingKey: message.pairingKey,
     action: message.action,
     payload: message.payload || {}
