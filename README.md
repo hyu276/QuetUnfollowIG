@@ -1,162 +1,176 @@
 # QuetUnfollowIG
 
-Local-first Instagram follower/following snapshot tracker with a Next.js live validation console.
+Cloud-backed Instagram Followers/Following change tracker with a Chrome/Chromium extension, a Next.js main site, and Supabase snapshot history.
 
-## Live deployment
+Production: https://quet-unfollow-ig.vercel.app
 
-Production test console: https://quet-unfollow-ig.vercel.app
+## What it does
 
-The repository contains two surfaces that use the same crawler:
+The extension uses the Instagram session already signed in on `instagram.com` to crawl relationship lists that the current session is allowed to see. Complete snapshots are uploaded to Supabase. The backend compares each target with its immediately previous complete snapshot and records:
 
-1. A Chrome/Chromium Manifest V3 extension that uses the Instagram session already logged in on `instagram.com`.
-2. A Next.js website that acts as a realtime control and validation console. It sends commands to the extension through a paired browser bridge and never receives the Instagram cookie itself.
-
-## v1.2: crawl any session-visible account
-
-The crawler is no longer limited to the logged-in account. Enter a target username, `@username`, or Instagram profile URL and the extension will resolve that profile to its numeric Instagram user ID, then request that target's Followers and Following lists with the current browser session.
-
-Supported cases:
-
-- Your own logged-in account: leave Target blank.
-- Public accounts whose follower/following lists Instagram allows the session to open.
-- Private accounts when the current logged-in Instagram session has permission to view those lists, for example an accepted follower relationship. Mutual following is not hard-coded as a requirement; actual visibility under the current Instagram session is the authority.
-
-Not supported:
-
-- Bypassing a private profile that the current session cannot see.
-- Using somebody else's cookie/session.
-- Circumventing Instagram access controls.
-
-If Instagram itself refuses the target list for the current session, the crawler returns an access error instead of treating the account as an empty list.
-
-## Target isolation
-
-Snapshots are keyed by both the logged-in viewer account and target account:
-
-`viewerInstagramId:targetInstagramId`
-
-This prevents data from being mixed when two different logged-in Instagram accounts have different visibility into the same private target.
-
-Each target gets its own:
-
-- baseline;
-- snapshot history;
-- Followers/Following arrays;
-- lost followers;
+- accounts that no longer follow the target;
+- accounts newly following the target;
 - accounts the target unfollowed;
-- new followers;
-- new following accounts.
+- accounts the target newly followed.
 
-Self-account snapshots are also kept in the original `accounts` store for backwards compatibility with the original extension dashboard.
+The main site shows both the counts and the exact Instagram accounts in each change category.
+
+A disappearance is an observed list difference, not proof of intent. Deactivation, deletion, blocking, visibility changes, or Instagram-side inconsistencies can also make an account disappear from a list.
+
+## Architecture
+
+A normal hosted website cannot reuse another origin's authenticated Instagram session. Instagram requests therefore remain inside the browser extension.
+
+Data flow:
+
+`Next.js main site -> paired web bridge -> MV3 service worker -> Instagram -> Supabase Edge Function -> PostgreSQL`
+
+Important boundaries:
+
+- Instagram cookies never go to the Next.js site or Supabase.
+- The browser extension performs the Instagram GET requests.
+- Supabase is the authoritative source for completed snapshot history and diffs.
+- `chrome.storage.local` is only a compact cache in schema v4; it no longer keeps 30 full relationship arrays.
+- The main site never receives the Cloud Workspace Key.
+
+## Supported targets
+
+Enter a username, `@username`, Instagram profile URL, or leave Target blank for the currently signed-in account.
+
+The crawler can work with:
+
+- your own signed-in account;
+- public accounts whose relationship lists Instagram exposes to the current session;
+- private accounts when the current signed-in session actually has permission to open those lists.
+
+The extension does not bypass private-profile access controls and does not use another person's session.
+
+## Cloud history and cross-device use
+
+All devices that use the same Cloud Workspace Key share the same targets, completed runs, and diffs.
+
+On the first device, the extension attempts to provision the workspace automatically. The generated Cloud Workspace Key stays inside extension storage and can be copied intentionally from the popup for another device.
+
+On another device:
+
+1. Install/reload the extension.
+2. Open the extension popup.
+3. Paste the Cloud Workspace Key from the first device.
+4. Choose **Connect existing**.
+
+Treat the Cloud Workspace Key as a secret. Losing it means a new device cannot authenticate to the existing cloud history.
+
+## Pairing key vs Cloud Workspace Key
+
+They are different credentials:
+
+- **Pairing key**: authorizes the main site in the same browser to command the extension. Rotate it if it is exposed.
+- **Cloud Workspace Key**: authenticates the extension to the shared Supabase workspace across devices. Do not paste it into the main site.
+
+The web bridge only allows `GET_STATUS` and `CRAWL_NOW` and is restricted to the production aliases plus localhost development.
+
+## Snapshot integrity
+
+A crawl is not considered historical truth merely because Instagram returned some users.
+
+A run becomes `complete` only when:
+
+1. Followers pagination finishes.
+2. Following pagination finishes.
+3. Every crawled membership is uploaded to Supabase.
+4. Supabase verifies uploaded counts exactly match crawler counts.
+5. When Instagram exposes profile relationship counts, the crawl also passes a count-completeness tolerance check.
+
+If upload is partial or the crawl count is materially inconsistent with an available expected count, the run is marked `failed` and is excluded from unfollow inference.
+
+The backend orders runs by the time the relationship snapshot was captured (`captured_at`), not by upload completion time. This matters when different devices finish uploading in a different order.
+
+## Main site modes
+
+**Professional Mode OFF** is the default consumer view. It focuses on:
+
+- target;
+- Followers / Following;
+- four relationship-change counts;
+- the full list of accounts in each change category.
+
+**Professional Mode ON** additionally shows technical telemetry, pagination, cloud validation, samples, viewer consistency, and history.
+
+The mode preference is stored in the browser.
+
+## Install / update extension
+
+1. Clone or download this repository.
+2. Open `chrome://extensions`.
+3. Enable **Developer mode**.
+4. Choose **Load unpacked** and select the repository folder.
+5. Whenever extension files change, click **Reload** on the QuetUnfollowIG extension card.
+6. Make sure `instagram.com` is signed in in the same browser.
+7. Open the extension popup and copy the Main Site pairing key.
+8. Open https://quet-unfollow-ig.vercel.app and paste the pairing key.
+
+Current extension version: **1.4.0**.
+
+## Typical workflow
+
+1. Paste the pairing key on the main site.
+2. Enter a target or leave it blank for your own account.
+3. Click **Connect**.
+4. Click **Run crawl**.
+5. The first successful run creates the cloud baseline for that target.
+6. Run the same target again later.
+7. Supabase compares it with the immediately previous complete run and the main site shows exactly which accounts changed.
+
+Only one crawler may run at a time in an extension instance. A second request is rejected instead of running two overlapping Instagram crawls.
 
 ## Target resolution
 
-Instagram's `web_profile_info` endpoint is currently brittle and may return an account-specific HTTP 400 even with a valid session. The extension therefore uses a fallback chain:
+For a non-self target, the extension currently tries multiple Instagram web endpoints because individual endpoints can be brittle:
 
 1. `/api/v1/users/web_profile_info/?username=...`
 2. `/api/v1/users/{username}/usernameinfo_stream/`
 3. `/api/v1/feed/user/{username}/username/?count=1`
 
-The live console displays which resolver succeeded.
+Instagram internal web endpoints are undocumented and may change without notice.
 
-## Architecture
+## Rate limits
 
-A normal hosted website cannot directly reuse the authenticated Instagram session from another tab because browser origin isolation prevents one site from reading another site's cookies/session. Privileged GET requests therefore remain inside the extension.
+The crawler adds randomized delay between pagination pages and treats HTTP 429 as rate limiting. Avoid repeatedly starting crawls in a short period.
 
-Data flow:
+A failed or incomplete run is not used as the previous-run reference for future diffs.
 
-`Next.js page -> window.postMessage -> web-bridge.js -> extension service worker -> instagram.com -> chrome.storage.local -> paired response -> Next.js UI`
-
-There is no Next.js API route for Instagram data and no follower/following payload is POSTed to Vercel.
-
-## What the live website validates
-
-For the selected target the Next.js console shows:
-
-- extension bridge status;
-- logged-in viewer Instagram ID;
-- target username and numeric ID;
-- public/private status;
-- whether the resolver reports the viewer follows the target;
-- resolver used;
-- profile follower/following counts when available;
-- realtime Followers/Following page number;
-- accounts received after each page;
-- per-page latency;
-- `Next page = yes/no`;
-- total crawl duration;
-- duplicate-ID checks;
-- count-vs-array integrity checks;
-- profile-count-vs-crawled-count checks when profile counts are available;
-- baseline-to-latest differences;
-- target-specific snapshot history;
-- raw sample users with numeric Instagram IDs.
-
-A profile-count mismatch is surfaced as a warning because it can indicate an incomplete crawl, a changing list during the run, or an Instagram-side count inconsistency.
-
-## Privacy and permissions
-
-- No password prompt.
-- No analytics.
-- No remote follower database.
-- No follow/unfollow automation.
-- Instagram data requests are GET-only.
-- Instagram cookies stay inside the extension context.
-- Snapshot data stays in `chrome.storage.local`.
-- The web bridge requires a random pairing key.
-- The website receives only the selected target's baseline/latest arrays and lightweight history summaries.
-
-Do not share the pairing key. If exposed, click **Tạo pairing key mới** in the extension popup.
-
-## Install / update the extension
-
-1. Download or clone this repository.
-2. Open `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select this repository folder.
-5. After every repository update, click **Reload** on the QuetUnfollowIG extension card.
-6. Make sure Instagram is logged in in that same browser.
-
-The current extension version is **1.2.0**.
-
-## Test a target on the production website
-
-1. Reload extension v1.2.0 in `chrome://extensions`.
-2. Open `https://quet-unfollow-ig.vercel.app` in the same Chromium browser.
-3. Copy the pairing key from the extension popup.
-4. Paste the pairing key into the website.
-5. Enter a target username. Leave blank to test your own account.
-6. Click **Resolve + Connect**.
-7. Confirm the target numeric ID and visibility metadata.
-8. Click **Run live crawl**.
-9. Watch Followers then Following pagination in realtime.
-10. The final page for each list should show **Next page = no**.
-11. Review Snapshot integrity and any profile-count mismatch warning.
-
-For a private-account test, first verify manually that the same Instagram browser session can open the target's Followers/Following UI. The extension intentionally does not bypass Instagram's access controls.
-
-## Controlled diff test
-
-1. Crawl target A to create its baseline.
-2. Change one known relationship on target A where you can observe the result.
-3. Crawl target A again.
-4. The baseline diff should identify the correct numeric user ID in the expected category.
-5. Switch to target B and crawl it. Target B must have an independent baseline/history.
-6. Switch Instagram viewer accounts and repeat target A. The second viewer must create a separate tracker.
-
-## Local Next.js development
+## Local development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000` and use the same pairing workflow.
+Open `http://localhost:3000`. The extension manifest permits localhost for development.
 
-## Rate limits and endpoint stability
+Production build also runs syntax validation for the extension JavaScript before Next.js compilation:
 
-Instagram's internal web endpoints are undocumented and can change without notice. Relationship lists currently paginate via `next_max_id`; the crawler adds randomized delays between pages. HTTP 429 is treated as rate limiting, and access failures for a non-self target are surfaced as target/session visibility errors.
+```bash
+npm run check:extension
+npm run build
+```
 
-Do not repeatedly hammer the crawl button. Use a conservative testing cadence.
+Top-level dependencies are pinned rather than using `latest` to reduce deployment drift.
 
-This project is not affiliated with Instagram or Meta.
+## Supabase source
+
+Database migrations are version-controlled in `supabase/migrations/` and the Edge Function source is in `supabase/functions/ig-cloud/index.ts`.
+
+Crawler tables have RLS enabled and no client policies by design. Direct `anon` / `authenticated` table access is revoked; the Edge Function performs authorized operations with the service role after validating the Cloud Workspace Key.
+
+## Privacy and limitations
+
+- No Instagram password prompt.
+- No Instagram password is stored.
+- No Instagram cookie is uploaded to the website or cloud backend.
+- The backend stores Instagram IDs, usernames, display names, relationship membership snapshots, crawl metadata, and computed changes.
+- This project does not automatically follow or unfollow accounts.
+- A list difference does not prove why the relationship changed.
+- Private-account results can differ when different viewer accounts have different visibility; the backend records the viewer ID and the Professional UI warns when the viewer changed.
+
+This project is unofficial and is not affiliated with Instagram or Meta.
