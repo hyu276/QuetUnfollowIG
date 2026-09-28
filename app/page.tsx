@@ -71,6 +71,12 @@ type CloudTargetStatus = {
     target_followed: CloudProfile[];
   };
   samples?: { followers: CloudProfile[]; following: CloudProfile[] };
+  relationship?: {
+    not_following_back: CloudProfile[];
+    not_following_back_count: number;
+    followers_you_dont_follow: CloudProfile[];
+    followers_you_dont_follow_count: number;
+  };
   comparison?: {
     previousRunId?: string | null;
     viewerChanged?: boolean;
@@ -381,6 +387,7 @@ export default function Home() {
   const cloudLatest = cloudStatus?.latest || null;
   const cloudHistory = cloudStatus?.history || [];
   const cloudChanges = cloudStatus?.changes;
+  const relationship = cloudStatus?.relationship;
   const cloudConnected = Boolean(status?.cloudConfig?.configured && !status?.cloudConfig?.error);
   const viewerChanged = Boolean(cloudStatus?.comparison?.viewerChanged);
   const hasPreviousCloudRun = Boolean(cloudLatest?.previous_run_id);
@@ -392,6 +399,11 @@ export default function Home() {
     unfollowed: (cloudChanges?.target_unfollowed || []).map(cloudUser),
     newFollowing: (cloudChanges?.target_followed || []).map(cloudUser)
   }), [cloudChanges]);
+
+  const relationshipLists = useMemo(() => ({
+    notFollowingBack: (relationship?.not_following_back || []).map(cloudUser),
+    followersYouDontFollow: (relationship?.followers_you_dont_follow || []).map(cloudUser)
+  }), [relationship]);
 
   const sampleFollowers = useMemo(() => {
     if (cloudStatus?.samples?.followers?.length) return cloudStatus.samples.followers.map(cloudUser);
@@ -405,6 +417,13 @@ export default function Home() {
 
   const followerCount = cloudLatest?.crawled_followers ?? localLatest?.counts.followers ?? null;
   const followingCount = cloudLatest?.crawled_following ?? localLatest?.counts.following ?? null;
+  const followerDelta = cloudLatest && cloudStatus?.previous
+    ? cloudLatest.crawled_followers - cloudStatus.previous.crawled_followers
+    : null;
+  const followingDelta = cloudLatest && cloudStatus?.previous
+    ? cloudLatest.crawled_following - cloudStatus.previous.crawled_following
+    : null;
+  const formatDelta = (value: number | null) => value == null ? "first complete run" : `${value >= 0 ? "+" : ""}${formatNumber(value)} vs previous`;
   const expectedForProgress = progress?.kind === "followers" ? target?.expectedFollowers : target?.expectedFollowing;
   const progressPercent = expectedForProgress && progress
     ? Math.min(100, Math.max(0, (progress.loaded / expectedForProgress) * 100))
@@ -604,13 +623,13 @@ export default function Home() {
                 <div className="metric-icon">03</div>
                 <span>Followers</span>
                 <strong>{formatNumber(followerCount)}</strong>
-                <small>{cloudLatest ? "Supabase complete run" : "No cloud snapshot"}</small>
+                <small>{cloudLatest ? formatDelta(followerDelta) : "No cloud snapshot"}</small>
               </article>
               <article className="metric-card hazy-card">
                 <div className="metric-icon">04</div>
                 <span>Following</span>
                 <strong>{formatNumber(followingCount)}</strong>
-                <small>{cloudLatest ? formatDate(cloudLatest.captured_at || cloudLatest.finished_at || cloudLatest.created_at) : "No cloud snapshot"}</small>
+                <small>{cloudLatest ? `${formatDelta(followingDelta)} · ${formatDate(cloudLatest.captured_at || cloudLatest.finished_at || cloudLatest.created_at)}` : "No cloud snapshot"}</small>
               </article>
             </div>
           ) : (
@@ -625,13 +644,13 @@ export default function Home() {
                 <div className="metric-icon">↓</div>
                 <span>Followers</span>
                 <strong>{formatNumber(followerCount)}</strong>
-                <small>Latest complete crawl</small>
+                <small>{cloudLatest ? formatDelta(followerDelta) : "Latest complete crawl"}</small>
               </article>
               <article className="metric-card hazy-card">
                 <div className="metric-icon">↑</div>
                 <span>Following</span>
                 <strong>{formatNumber(followingCount)}</strong>
-                <small>Latest complete crawl</small>
+                <small>{cloudLatest ? formatDelta(followingDelta) : "Latest complete crawl"}</small>
               </article>
             </div>
           )}
@@ -710,6 +729,37 @@ export default function Home() {
           </div>
         </section>
       ) : null}
+
+      <section className="content-section" id="relationships">
+        <div className="section-wrap">
+          <div className="section-heading">
+            <span className="section-tag"><i>{professionalMode ? "03" : "02"}</i> Current relationship</span>
+            <div>
+              <h2>Who does not<br />follow back?</h2>
+              <p>Đối chiếu trực tiếp Followers và Following trong latest complete snapshot. Phần này có kết quả ngay từ lần crawl đầu tiên, không cần baseline trước đó.</p>
+            </div>
+          </div>
+
+          <div className="behavior-grid">
+            <BehaviorListCard
+              title={selfTarget ? "You follow — they don't follow back" : "Target follows — they don't follow target back"}
+              description={selfTarget ? "Có trong Following của bạn nhưng không có trong Followers của bạn." : "Có trong Following của target nhưng không có trong Followers của target."}
+              users={relationshipLists.notFollowingBack}
+              tone="red"
+              symbol="↛"
+              hasPreviousRun={Boolean(cloudLatest)}
+            />
+            <BehaviorListCard
+              title={selfTarget ? "They follow you — you don't follow back" : "They follow target — target doesn't follow back"}
+              description={selfTarget ? "Có trong Followers của bạn nhưng không có trong Following của bạn." : "Có trong Followers của target nhưng không có trong Following của target."}
+              users={relationshipLists.followersYouDontFollow}
+              tone="blue"
+              symbol="↚"
+              hasPreviousRun={Boolean(cloudLatest)}
+            />
+          </div>
+        </div>
+      </section>
 
       <section className="content-section" id="changes">
         <div className="section-wrap">
