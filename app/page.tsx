@@ -94,6 +94,8 @@ type StatusResult = {
   loggedInUserId: string | null;
   target: TargetProfile | null;
   tracker: WebTracker | null;
+  requestedTarget?: string;
+  targetResolutionError?: string;
   cloudConfig?: CloudConfig;
   cloud?: CloudEnvelope | null;
 };
@@ -579,6 +581,7 @@ export default function Home() {
             </div>
             {error ? <div className="notice notice-error"><span>!</span><p>{error}</p></div> : null}
             {cloudEnvelope?.error ? <div className="notice notice-error"><span>!</span><p>Cloud: {cloudEnvelope.error}</p></div> : null}
+            {status?.targetResolutionError ? <div className="notice notice-warning"><span>!</span><p>Pairing và Cloud Workspace đã kết nối, nhưng Instagram chưa resolve được @{status.requestedTarget}: {status.targetResolutionError} Bạn vẫn có thể thử Run crawl sau, hoặc để trống target nếu muốn quét chính tài khoản đang đăng nhập.</p></div> : null}
             {professionalMode && viewerChanged ? <div className="notice notice-warning"><span>!</span><p>The previous complete run used a different Instagram viewer. Diff confidence is lower for private accounts.</p></div> : null}
             {professionalMode && localLatest?.warnings?.length ? <div className="notice notice-warning"><span>!</span><p>{localLatest.warnings.join(" ")}</p></div> : null}
           </div>
