@@ -558,6 +558,10 @@ chrome.runtime.onConnect.addListener((port) => {
   bridgePorts.add(port);
   port.onDisconnect.addListener(() => bridgePorts.delete(port));
   port.onMessage.addListener(async (message) => {
+    if (message?.type === "BRIDGE_KEEPALIVE") {
+      try { port.postMessage({ type: "BRIDGE_ALIVE", at: Date.now() }); } catch (_) {}
+      return;
+    }
     if (message?.type !== "WEB_REQUEST") return;
     try {
       const result = await handleWebRequest(message);
