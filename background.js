@@ -210,8 +210,10 @@ async function resolveTargetProfile(input, viewerId) {
   }
 
   const attempts = [
+    { name: "current_user", url: "https://www.instagram.com/api/v1/accounts/current_user/?edit=true", exactUsername: true },
     { name: "web_profile_info", url: `https://www.instagram.com/api/v1/users/web_profile_info/?username=${encodeURIComponent(username)}` },
-    { name: "usernameinfo_stream", url: `https://www.instagram.com/api/v1/users/${encodeURIComponent(username)}/usernameinfo_stream/` },
+    { name: "topsearch", url: `https://www.instagram.com/api/v1/web/search/topsearch/?query=${encodeURIComponent(username)}` },
+    { name: "usernameinfo", url: `https://www.instagram.com/api/v1/users/${encodeURIComponent(username)}/usernameinfo/` },
     { name: "feed_by_username", url: `https://www.instagram.com/api/v1/feed/user/${encodeURIComponent(username)}/username/?count=1` }
   ];
 
@@ -222,6 +224,10 @@ async function resolveTargetProfile(input, viewerId) {
       if (!response.ok) { errors.push(`${attempt.name}: HTTP ${response.status}`); continue; }
       const candidate = findUserCandidate(data, username);
       if (!candidate) { errors.push(`${attempt.name}: no user payload`); continue; }
+      if (attempt.exactUsername && normalizeUsername(candidate.username) !== username) {
+        errors.push(`${attempt.name}: different signed-in user`);
+        continue;
+      }
       const profile = normalizeTargetProfile(candidate, username);
       if (!profile.id) { errors.push(`${attempt.name}: no numeric id`); continue; }
       profile.resolver = attempt.name;
@@ -512,7 +518,21 @@ async function statusForWeb(options = {}) {
     };
   }
 
-  const target = await resolveTargetProfile(rawTarget, viewerId);
+  let target = null;
+  try {
+    target = await resolveTargetProfile(rawTarget, viewerId);
+  } catch (error) {
+    return {
+      loggedInUserId: viewerId,
+      target: null,
+      tracker: null,
+      cloudConfig,
+      cloud: null,
+      requestedTarget: rawTarget,
+      targetResolutionError: error?.message || String(error),
+      activeCrawl: activeCrawl ? { ...activeCrawl } : null
+    };
+  }
   const state = await getState();
   const tracker = state.targets[trackerKey(viewerId, target.id)] || null;
   const cloud = await safeCloudTargetStatus(target.id);
