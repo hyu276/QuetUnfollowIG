@@ -153,6 +153,56 @@ async function getSamples(runId: string, relation: "followers" | "following", li
   return hydrateProfiles((data || []).map((x: any) => x.profile_ig_id));
 }
 
+async function getMembershipIds(runId: string, relation: "followers" | "following") {
+  const ids: string[] = [];
+  const batchSize = 1000;
+  let offset = 0;
+
+  while (true) {
+    const { data, error } = await supabase.from("ig_crawl_memberships")
+      .select("profile_ig_id")
+      .eq("run_id", runId)
+      .eq("relation", relation)
+      .range(offset, offset + batchSize - 1);
+    if (error) throw error;
+
+    const rows = data || [];
+    ids.push(...rows.map((row: any) => String(row.profile_ig_id)).filter(Boolean));
+    if (rows.length < batchSize) break;
+    offset += batchSize;
+  }
+
+  return ids;
+}
+
+async function getRelationshipSummary(runId: string) {
+  const [followers, following] = await Promise.all([
+    getMembershipIds(runId, "followers"),
+    getMembershipIds(runId, "following")
+  ]);
+
+  const followerSet = new Set(followers);
+  const followingSet = new Set(following);
+  const notFollowingBackIds = following.filter((id) => !followerSet.has(id));
+  const followersYouDontFollowIds = followers.filter((id) => !followingSet.has(id));
+
+  const [notFollowingBack, followersYouDontFollow] = await Promise.all([
+    hydrateProfiles(notFollowingBackIds),
+    hydrateProfiles(followersYouDontFollowIds)
+  ]);
+
+  const sortProfiles = (items: any[]) => items.sort(
+    (a: any, b: any) => String(a.username || "").localeCompare(String(b.username || ""))
+  );
+
+  return {
+    not_following_back: sortProfiles(notFollowingBack),
+    not_following_back_count: notFollowingBackIds.length,
+    followers_you_dont_follow: sortProfiles(followersYouDontFollow),
+    followers_you_dont_follow_count: followersYouDontFollowIds.length
+  };
+}
+
 async function markRunFailed(runId: string, message: string, uploadedFollowers = 0, uploadedFollowing = 0) {
   await supabase.from("ig_crawl_runs").update({
     status: "failed",
@@ -408,7 +458,8 @@ Deno.serve(async (req: Request) => {
         ok: true,
         run: completed,
         diffSummary: summary,
-        changes: await getChanges(runId)
+        changes: await getChanges(runId),
+        relationship: await getRelationshipSummary(runId)
       });
     }
 
@@ -454,6 +505,14 @@ Deno.serve(async (req: Request) => {
             following: await getSamples(latest.id, "following", 12),
           }
         : { followers: [], following: [] };
+      const relationship = latest
+        ? await getRelationshipSummary(latest.id)
+        : {
+            not_following_back: [],
+            not_following_back_count: 0,
+            followers_you_dont_follow: [],
+            followers_you_dont_follow_count: 0
+          };
 
       return json({
         ok: true,
@@ -464,6 +523,7 @@ Deno.serve(async (req: Request) => {
         previous,
         changes,
         samples,
+        relationship,
         comparison: latest
           ? {
               previousRunId: latest.previous_run_id || null,
