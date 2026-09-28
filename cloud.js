@@ -1,6 +1,9 @@
 const CLOUD_WORKSPACE_KEY_STORAGE = "quetUnfollowIGCloudWorkspaceKey";
 const CLOUD_CLIENT_ID_STORAGE = "quetUnfollowIGCloudClientId";
-const CLOUD_API_URL = "https://wtqrcakakfmpjrlgpvsp.supabase.co/functions/v1/ig-cloud";
+const CLOUD_API_URLS = [
+  "https://wtqrcakakfmpjrlgpvsp.supabase.co/functions/v1/ig-cloud",
+  "https://quet-unfollow-ig.vercel.app/api/cloud"
+];
 const CLOUD_CHUNK_SIZE = 250;
 
 let cloudProvisionPromise = null;
@@ -43,30 +46,32 @@ async function cloudCall(action, payload = {}, options = {}) {
 
   let lastError = null;
   const attempts = options.attempts || 3;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      const response = await fetch(CLOUD_API_URL, {
-        method: "POST",
-        headers,
-        body: JSON.stringify(body),
-        cache: "no-store"
-      });
-      let data = null;
-      try { data = await response.json(); } catch (_) {}
-      if (!response.ok || data?.ok === false) {
-        const error = new Error(data?.error || `Cloud API HTTP ${response.status}`);
-        error.status = response.status;
-        error.code = data?.code || "CLOUD_API_ERROR";
-        if (response.status >= 400 && response.status < 500) throw error;
+  for (const apiUrl of CLOUD_API_URLS) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      try {
+        const response = await fetch(apiUrl, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          cache: "no-store"
+        });
+        let data = null;
+        try { data = await response.json(); } catch (_) {}
+        if (!response.ok || data?.ok === false) {
+          const error = new Error(data?.error || `Cloud API HTTP ${response.status}`);
+          error.status = response.status;
+          error.code = data?.code || "CLOUD_API_ERROR";
+          if (response.status >= 400 && response.status < 500) throw error;
+          lastError = error;
+        } else {
+          return data;
+        }
+      } catch (error) {
         lastError = error;
-      } else {
-        return data;
+        if (error?.status >= 400 && error.status < 500) throw error;
       }
-    } catch (error) {
-      lastError = error;
-      if (error?.status >= 400 && error.status < 500) throw error;
+      if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
     }
-    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
   }
   throw lastError || new Error("Không kết nối được Supabase cloud backend.");
 }
