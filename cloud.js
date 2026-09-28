@@ -1,6 +1,6 @@
 const CLOUD_WORKSPACE_KEY_STORAGE = "quetUnfollowIGCloudWorkspaceKey";
 const CLOUD_CLIENT_ID_STORAGE = "quetUnfollowIGCloudClientId";
-const CLOUD_API_URL = "https://zkrhwqgmynbbmoktokdq.supabase.co/functions/v1/ig-cloud";
+const CLOUD_API_URL = "https://wtqrcakakfmpjrlgpvsp.supabase.co/functions/v1/ig-cloud";
 const CLOUD_CHUNK_SIZE = 250;
 
 let cloudProvisionPromise = null;
@@ -136,6 +136,32 @@ async function cloudGetConfig() {
       autoProvisioned: false
     };
   } catch (error) {
+    if (error?.code === "WORKSPACE_NOT_FOUND") {
+      await setCloudWorkspaceKey("");
+      try {
+        const created = await autoProvisionCloudWorkspace();
+        key = created.workspaceKey;
+        return {
+          configured: true,
+          workspace: created.workspace,
+          workspaceKey: key,
+          maskedKey: `${key.slice(0, 8)}…${key.slice(-6)}`,
+          autoProvisioned: true,
+          migratedFromLegacyBackend: true
+        };
+      } catch (provisionError) {
+        const existingHint = provisionError?.code === "WORKSPACE_ALREADY_EXISTS"
+          ? " Workspace đã được tạo trên extension khác: hãy copy Cloud Workspace Key từ extension đó và chọn Connect existing."
+          : "";
+        return {
+          configured: false,
+          workspace: null,
+          maskedKey: "",
+          code: provisionError?.code || "LEGACY_WORKSPACE_MIGRATION_FAILED",
+          error: `Cloud Workspace Key cũ thuộc backend đã ngừng hoạt động.${existingHint} ${provisionError?.message || String(provisionError)}`.trim()
+        };
+      }
+    }
     return {
       configured: true,
       workspace: null,
@@ -149,7 +175,16 @@ async function cloudGetConfig() {
 
 async function cloudRequireWorkspace() {
   let key = await getCloudWorkspaceKey();
-  if (key) return key;
+  if (key) {
+    try {
+      await cloudCall("ping", {}, { workspaceKey: key, attempts: 1 });
+      return key;
+    } catch (error) {
+      if (error?.code !== "WORKSPACE_NOT_FOUND") throw error;
+      await setCloudWorkspaceKey("");
+      key = "";
+    }
+  }
 
   const config = await cloudGetConfig();
   key = await getCloudWorkspaceKey();

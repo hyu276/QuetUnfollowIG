@@ -112,6 +112,7 @@ type PendingRequest = {
   reject: (reason?: any) => void;
   timeout: ReturnType<typeof setTimeout>;
 };
+type BridgeInfo = { version: string; pairingFingerprint: string };
 type BehaviorListProps = {
   title: string;
   description: string;
@@ -121,8 +122,13 @@ type BehaviorListProps = {
   hasPreviousRun: boolean;
 };
 
-const SOURCE = "quet-unfollow-ig-web";
+const SOURCE = "quet-unfollow-ig-web-v2";
 const PROFESSIONAL_MODE_KEY = "quet-unfollow-professional-mode";
+
+async function pairingFingerprint(value: string) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value.trim()));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function formatNumber(value?: number | null) {
   return value == null ? "—" : new Intl.NumberFormat("vi-VN").format(value);
@@ -217,6 +223,8 @@ export default function Home() {
   const [logs, setLogs] = useState<ProgressEvent[]>([]);
   const [professionalMode, setProfessionalMode] = useState(false);
   const pending = useRef(new Map<string, PendingRequest>());
+  const bridges = useRef(new Map<string, BridgeInfo>());
+  const activeBridgeId = useRef("");
 
   useEffect(() => {
     const savedKey = window.localStorage.getItem("quet-unfollow-pairing-key");
@@ -239,22 +247,32 @@ export default function Home() {
       if (message?.source !== SOURCE) return;
 
       if (message.type === "BRIDGE_READY") {
-        setBridgeReady(true);
-        setBridgeVersion(message.version || "unknown");
+        const bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
+        const fingerprint = typeof message.pairingFingerprint === "string" ? message.pairingFingerprint : "";
+        if (!bridgeId || !fingerprint) return;
+        const version = message.version || "unknown";
+        bridges.current.set(bridgeId, { version, pairingFingerprint: fingerprint });
+        setBridgeReady(bridges.current.size > 0);
+        setBridgeVersion(version);
         return;
       }
       if (message.type === "BRIDGE_DISCONNECTED") {
-        setBridgeReady(false);
-        setError(message.error || "Extension bridge disconnected.");
+        const bridgeId = typeof message.bridgeId === "string" ? message.bridgeId : "";
+        if (bridgeId) bridges.current.delete(bridgeId);
+        if (activeBridgeId.current === bridgeId) activeBridgeId.current = "";
+        setBridgeReady(bridges.current.size > 0);
+        if (bridges.current.size === 0) setError(message.error || "Extension bridge disconnected.");
         return;
       }
       if (message.type === "CRAWL_PROGRESS") {
+        if (activeBridgeId.current && message.bridgeId !== activeBridgeId.current) return;
         const payload = message.payload as ProgressEvent;
         setProgress(payload);
         setLogs((items) => [...items.slice(-199), payload]);
         return;
       }
       if (message.type === "WEB_RESPONSE") {
+        if (activeBridgeId.current && message.bridgeId !== activeBridgeId.current) return;
         const req = pending.current.get(message.requestId);
         if (!req) return;
         clearTimeout(req.timeout);
@@ -276,6 +294,8 @@ export default function Home() {
       window.removeEventListener("message", onMessage);
       for (const req of pending.current.values()) clearTimeout(req.timeout);
       pending.current.clear();
+      bridges.current.clear();
+      activeBridgeId.current = "";
     };
   }, []);
 
@@ -287,12 +307,24 @@ export default function Home() {
     });
   }
 
-  function request<T>(action: "GET_STATUS" | "CRAWL_NOW", payload: Record<string, unknown> = {}, key = pairingKey) {
+  async function request<T>(action: "GET_STATUS" | "CRAWL_NOW", payload: Record<string, unknown> = {}, key = pairingKey) {
+    if (bridges.current.size === 0) {
+      throw new Error("Không phát hiện extension bridge. Reload extension rồi reload website.");
+    }
+    const normalizedKey = key.trim();
+    if (!/^[a-f0-9]{36}$/i.test(normalizedKey)) {
+      throw new Error("Pairing key không đúng định dạng.");
+    }
+    const fingerprint = await pairingFingerprint(normalizedKey);
+    const match = [...bridges.current.entries()].find(([, bridge]) => bridge.pairingFingerprint === fingerprint);
+    if (!match) {
+      throw new Error("Pairing key không khớp với extension QuetUnfollowIG đang hoạt động. Hãy Reload đúng extension rồi copy lại key từ popup.");
+    }
+    const [bridgeId, bridge] = match;
+    activeBridgeId.current = bridgeId;
+    setBridgeVersion(bridge.version);
+
     return new Promise<T>((resolve, reject) => {
-      if (!bridgeReady) {
-        reject(new Error("Không phát hiện extension bridge. Reload extension rồi reload website."));
-        return;
-      }
       const requestId = crypto.randomUUID();
       const timeout = setTimeout(() => {
         pending.current.delete(requestId);
@@ -300,7 +332,7 @@ export default function Home() {
       }, action === "CRAWL_NOW" ? 20 * 60_000 : 30_000);
       pending.current.set(requestId, { resolve, reject, timeout });
       window.postMessage(
-        { source: SOURCE, type: "WEB_REQUEST", requestId, pairingKey: key.trim(), action, payload },
+        { source: SOURCE, bridgeId, type: "WEB_REQUEST", requestId, pairingKey: normalizedKey, action, payload },
         window.location.origin
       );
     });

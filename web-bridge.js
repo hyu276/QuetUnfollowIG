@@ -1,10 +1,28 @@
-const BRIDGE_SOURCE = "quet-unfollow-ig-web";
+const BRIDGE_SOURCE = "quet-unfollow-ig-web-v2";
+const PAIRING_KEY_STORAGE = "quetUnfollowIGPairingKey";
+const BRIDGE_ID = chrome.runtime.id;
 const ALLOWED_ACTIONS = new Set(["GET_STATUS", "CRAWL_NOW"]);
 const port = chrome.runtime.connect({ name: "quet-unfollow-web-bridge" });
 const pendingActions = new Map();
 
 function postToPage(type, payload = {}) {
-  window.postMessage({ source: BRIDGE_SOURCE, type, ...payload }, window.location.origin);
+  window.postMessage({ source: BRIDGE_SOURCE, bridgeId: BRIDGE_ID, type, ...payload }, window.location.origin);
+}
+
+async function pairingFingerprint() {
+  const stored = await chrome.storage.local.get(PAIRING_KEY_STORAGE);
+  const key = String(stored[PAIRING_KEY_STORAGE] || "").trim();
+  if (!/^[a-f0-9]{36}$/i.test(key)) return "";
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function announceBridge() {
+  postToPage("BRIDGE_READY", {
+    version: chrome.runtime.getManifest().version,
+    extensionName: chrome.runtime.getManifest().name,
+    pairingFingerprint: await pairingFingerprint()
+  });
 }
 
 function sanitizeWebResult(message) {
@@ -47,14 +65,12 @@ window.addEventListener("message", (event) => {
   if (message?.source !== BRIDGE_SOURCE) return;
 
   if (message.type === "BRIDGE_PING") {
-    postToPage("BRIDGE_READY", {
-      version: chrome.runtime.getManifest().version,
-      extensionName: chrome.runtime.getManifest().name
-    });
+    announceBridge();
     return;
   }
 
   if (message.type !== "WEB_REQUEST") return;
+  if (message.bridgeId !== BRIDGE_ID) return;
   const requestId = typeof message.requestId === "string" ? message.requestId : "";
   if (!requestId) {
     rejectRequest("", "Bridge requestId không hợp lệ.");
@@ -79,7 +95,4 @@ window.addEventListener("message", (event) => {
   });
 });
 
-postToPage("BRIDGE_READY", {
-  version: chrome.runtime.getManifest().version,
-  extensionName: chrome.runtime.getManifest().name
-});
+announceBridge();

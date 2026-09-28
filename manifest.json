@@ -1,12 +1,12 @@
 {
   "manifest_version": 3,
   "name": "QuetUnfollowIG",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Cloud-backed Instagram follower/following snapshot tracker for any account visible to the current browser session.",
   "permissions": ["storage", "cookies"],
   "host_permissions": [
     "https://www.instagram.com/*",
-    "https://zkrhwqgmynbbmoktokdq.supabase.co/*",
+    "https://wtqrcakakfmpjrlgpvsp.supabase.co/*",
     "https://quet-unfollow-ig.vercel.app/*",
     "https://quet-unfollow-ig-hyu4.vercel.app/*",
     "http://localhost/*",
