@@ -58,7 +58,7 @@ QuetUnfollowIG **không yêu cầu nhập mật khẩu Instagram vào ứng dụ
 4. Chọn **Load unpacked**.
 5. Chọn thư mục gốc của repository `QuetUnfollowIG`.
 6. Kiểm tra extension **QuetUnfollowIG** đã xuất hiện trong danh sách.
-7. Phiên bản hiện tại phải hiển thị là **1.4.0**.
+7. Phiên bản hiện tại phải hiển thị là **1.4.1**.
 8. Nên ghim extension lên thanh công cụ Chrome để thao tác nhanh hơn.
 
 Sau mỗi lần bạn cập nhật source code từ GitHub, hãy quay lại `chrome://extensions` và bấm **Reload** trên extension QuetUnfollowIG. Nếu không reload, Chrome có thể tiếp tục chạy code cũ dù repository trên máy đã được cập nhật.
@@ -457,7 +457,7 @@ The mode preference is stored in the browser.
 7. Open the extension popup and copy the Main Site pairing key.
 8. Open https://quet-unfollow-ig.vercel.app and paste the pairing key.
 
-Current extension version: **1.4.0**.
+Current extension version: **1.4.1**.
 
 ## Typical workflow
 
